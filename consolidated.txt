@@ -1,0 +1,4568 @@
+
+==============================
+Path: public\js\c64Syntax.js  
+==============================
+// c64Syntax.js - Commodore 64 inspired command translation layer
+(function(){
+  const C64_COMMAND_MAP = {
+    'HELP': 'help',
+    '?': 'help',
+    'DIR': 'list',
+    'CATALOG': 'list',
+    'HOME': 'shop',
+    'LOAD"$"': 'shop',
+    'DIR ALL': 'list all',
+    'CATALOG *': 'list all',
+
+    'CD': 'load',
+    'OPEN': 'load',
+    'GROUP': 'category',
+    '@': 'category',
+
+    'EXAM': 'detail',
+    'TYPE': 'detail',
+
+    'GET': 'cart add',
+    'BASKET': 'cart',
+    'DROP': 'cart remove',
+    'REM': 'cart remove',
+    'BUY': 'checkout',
+    'MON CART': 'debug checkout',
+    'SYS CART': 'debug checkout',
+    'NEW CART': 'clear session',
+    'RESET': 'clear session',
+
+    'FIND': 'search',
+    'SEEK': 'search',
+
+    'ORDER': 'sort',
+    'ARRANGE': 'sort',
+    'FLIP': 'toggle view',
+    'MODE': 'toggle view'
+  };
+
+  const SORT_CRITERIA_MAP = {
+    'PRICE UP': 'price asc',
+    'PRICE DOWN': 'price desc',
+    'POP': 'popular',
+    'NEW': 'newest'
+  };
+
+  let originalRunCommand = null;
+
+  function init() {
+    console.log("C64 Syntax: Attempting to initialize...");
+    if (!window.commandManager) {
+      console.error("C64 Syntax: commandManager not found");
+      setTimeout(init, 500);
+      return;
+    }
+
+    if (!window.commandManager.runCommand) {
+      console.warn("C64 Syntax: No 'runCommand' found on commandManager.");
+      return;
+    }
+
+    // Store the original runCommand
+    originalRunCommand = window.commandManager.runCommand;
+
+    // Override runCommand with translator
+    window.commandManager.runCommand = function(cmd) {
+      console.log(`C64 Syntax: Processing command: "${cmd}"`);
+      const translatedCmd = translateCommand(cmd);
+      console.log(`C64 Syntax: Translated "${cmd}" -> "${translatedCmd}"`);
+      return originalRunCommand.call(window.commandManager, translatedCmd);
+    };
+
+    console.log("C64 Syntax: Command translation successfully initialized!");
+  }
+
+  function translateCommand(cmd) {
+    if (!cmd || typeof cmd !== 'string') return cmd;
+    const originalCmd = cmd;
+    const upperCmd = cmd.trim().toUpperCase();
+
+    // Category shortcuts with @
+    if (upperCmd.startsWith('@')) {
+      const catName = originalCmd.substring(1);
+      return `category ${catName}`;
+    }
+
+    // Check for exact command matches
+    if (C64_COMMAND_MAP[upperCmd]) {
+      return C64_COMMAND_MAP[upperCmd];
+    }
+
+    // Commands with parameters
+    const parts = upperCmd.split(' ');
+    const baseCmd = parts[0];
+
+    if (C64_COMMAND_MAP[baseCmd]) {
+      const originalParts = originalCmd.trim().split(' ');
+      const params = originalParts.slice(1).join(' ');
+      return `${C64_COMMAND_MAP[baseCmd]} ${params}`.trim();
+    }
+
+    // Two-word base commands
+    if (parts.length >= 2) {
+      const twoWordBase = `${parts[0]} ${parts[1]}`;
+      if (C64_COMMAND_MAP[twoWordBase]) {
+        const originalParts = originalCmd.trim().split(' ');
+        const params = originalParts.slice(2).join(' ');
+        const translatedBase = C64_COMMAND_MAP[twoWordBase];
+        return `${translatedBase} ${params}`.trim();
+      }
+    }
+
+    // Sort criteria
+    if (parts[0] === 'ORDER' || parts[0] === 'ARRANGE') {
+      const criteriaKey = parts.slice(1).join(' ');
+      if (SORT_CRITERIA_MAP[criteriaKey]) {
+        return `sort ${SORT_CRITERIA_MAP[criteriaKey]}`;
+      }
+    }
+
+    // If no translation, return as-is
+    return originalCmd;
+  }
+
+  window.c64Syntax = {
+    init,
+    translateCommand,
+    forceInit: function() {
+      console.log("C64 Syntax: Force initialization requested");
+      init();
+    }
+  };
+})();
+
+
+==============================
+Path: public\js\cartManager.js  
+==============================
+// cartManager.js
+(function () {
+  function addToCart(id) {
+    displayManager.writeLine("Adding product " + id + " to cart…");
+
+    productServices.fetchProducts()
+      .then(products => {
+        let product = null;
+        const idx = parseInt(id, 10) - 1;
+        const currentResults = viewRenderer.getCurrentResults();
+
+        // look up by list index first, fall back to absolute ID
+        if (!isNaN(idx) && currentResults[idx]) {
+          product = currentResults[idx];
+        } else {
+          product = products.find(p => p.product_id == id || p.id == id);
+        }
+
+        if (!product) {
+          displayManager.writeLine("Product not found.");
+          return;
+        }
+
+        const img = viewRenderer.getImageUrl(product);
+
+        // fire Snipcart programmatically
+        const tempBtn = document.createElement("button");
+        tempBtn.className = "snipcart-add-item";
+        tempBtn.dataset.itemId = product.product_id || product.id;
+        tempBtn.dataset.itemName = product.name || "Product";
+        tempBtn.dataset.itemPrice = product.price || 0;
+        tempBtn.dataset.itemDescription = product.description || "";
+        tempBtn.dataset.itemImage = img;
+        tempBtn.dataset.itemUrl = window.location.href;
+        tempBtn.style.display = "none";
+        document.body.appendChild(tempBtn);
+        tempBtn.click();
+        tempBtn.remove();
+
+        displayManager.writeLine(`Product “${product.name}” added to cart.`);
+      })
+      .catch(err => displayManager.writeLine("Error: " + err.message));
+  }
+
+  function viewCart() {
+    const cartBtn = document.querySelector(".snipcart-checkout");
+    if (cartBtn) cartBtn.click();
+    else displayManager.writeLine("Cart button not found.");
+  }
+
+  function checkout() {
+    viewCart();
+  }
+
+  window.cartManager = { addToCart, viewCart, checkout };
+})();
+
+
+==============================
+Path: public\js\commandManager.js
+==============================
+// public/js/commandManager.js
+// Handles all C64-style command processing and navigation
+// This is the main controller for the application
+
+// ***** START SCOPE: commandManager *****
+(function() {
+  // ============================================
+  // CORE VARIABLES AND STATE
+  // ============================================
+  
+  // ***** START SCOPE: coreVariables *****
+  // Core variables for keyboard and navigation management
+  let keyCapture, navLinks;
+  let currentContext = 'categories'; // What's currently displayed (categories, products, programs, or page name)
+  let currentItems = []; // Items currently shown on screen (categories, products, or programs)
+  // ***** END SCOPE: coreVariables *****
+  
+  // ***** START SCOPE: sessionState *****
+  // Session state storage - preserves state when navigating between pages
+  // This allows users to return to their previous view when using back navigation
+  let sessionState = {
+    categories: {
+      items: [],        // Array of category objects
+      screenLines: [],  // Saved screen content
+      breadcrumbs: []   // Navigation breadcrumbs
+    },
+    products: {
+      items: [],        // Array of product objects
+      screenLines: [],  // Saved screen content
+      breadcrumbs: [],  // Navigation breadcrumbs
+      categoryName: ''  // Name of the current category
+    },
+    programs: {
+      items: [],        // Array of program objects
+      screenLines: [],  // Saved screen content
+      breadcrumbs: []   // Navigation breadcrumbs
+    }
+  };
+  // ***** END SCOPE: sessionState *****
+  
+  // ***** START SCOPE: constants *****
+  // All valid page names that can be loaded
+  const VALID_PAGES = ['home', 'shop', 'code', 'bbs', 'pro-play', 'bas-play'];
+  // ***** END SCOPE: constants *****
+  
+  // ============================================
+  // INITIALIZATION
+  // ============================================
+  
+  // ***** START SCOPE: init *****
+  /**
+   * Initialize the command manager
+   * Sets up keyboard handling, display manager, and initial screen
+   * @param {Object} params - Contains keyCapture input, c64Output display, and navLinks
+   */
+  function init({ keyCapture: _keyCapture, c64Output: _c64Output, navLinks: _navLinks }) {
+    keyCapture = _keyCapture;
+    navLinks = _navLinks || [];
+
+    // ***** START SCOPE: initDisplayManager *****
+    // Initialize displayManager with the output element
+    if (window.displayManager && typeof window.displayManager.init === 'function') {
+      displayManager.init(_c64Output);
+    } else {
+      console.error('displayManager not available');
+      return;
+    }
+    // ***** END SCOPE: initDisplayManager *****
+    
+    // ***** START SCOPE: initialScreenSetup *****
+    // Initial screen setup - C64 boot screen (only shown once on startup)
+    const initialLines = [
+      { type: 'text', content: "*** COMMODORE 64 BASIC V2 ***" },
+      { type: 'text', content: " 64K RAM SYSTEM  38911 BASIC BYTES FREE" },
+      { type: 'text', content: "READY." }
+    ];
+    displayManager.setScreenLines(initialLines);
+    displayManager.updateToggleButton();
+    displayManager.setCurrentLine("");
+    displayManager.renderScreen();
+    // ***** END SCOPE: initialScreenSetup *****
+
+    // ***** START SCOPE: keyboardSetup *****
+    // Set up keyboard handling for C64-style input
+    keyCapture.addEventListener("keydown", onKeyDown);
+    // Ensure keyboard focus when clicking anywhere
+    document.addEventListener("click", () => { keyCapture.focus(); });
+    keyCapture.focus();
+    // ***** END SCOPE: keyboardSetup *****
+
+    // ***** START SCOPE: exposeRunCommand *****
+    // Expose runCommand globally for other modules to use
+    window.commandManager.runCommand = runCommand;
+    // ***** END SCOPE: exposeRunCommand *****
+  }
+  // ***** END SCOPE: init *****
+
+  // ============================================
+  // STATE MANAGEMENT
+  // ============================================
+  
+  // ***** START SCOPE: saveCurrentState *****
+  /**
+   * Save current view state before switching pages
+   * Allows returning to the same place when navigating back
+   */
+  function saveCurrentState() {
+    if (currentContext === 'categories' || currentContext === 'products' || currentContext === 'programs') {
+      sessionState[currentContext] = {
+        items: [...currentItems],
+        screenLines: displayManager.getScreenLines().slice(), // Fixed: capital L in getScreenLines
+        breadcrumbs: window.viewRenderer ? viewRenderer.getCurrentBreadcrumbs() : []
+      };
+      
+      // Special handling for products - preserve category name
+      if (currentContext === 'products' && sessionState.products.categoryName) {
+        const temp = sessionState.products.categoryName;
+        sessionState.products.categoryName = temp;
+      }
+    }
+  }
+  // ***** END SCOPE: saveCurrentState *****
+  
+  // ***** START SCOPE: restoreState *****
+  /**
+   * Restore previously saved state when returning to a view
+   * @param {string} context - The context to restore (categories, products, programs)
+   * @returns {boolean} - True if state was restored, false if no state to restore
+   */
+  function restoreState(context) {
+    if ((context === 'categories' || context === 'products' || context === 'programs') && 
+        sessionState[context].items.length > 0) {
+      currentItems = sessionState[context].items;
+      displayManager.setScreenLines(sessionState[context].screenLines);
+      
+      if (window.viewRenderer) {
+        viewRenderer.setCurrentResults(currentItems);
+        viewRenderer.updateBreadcrumbs(sessionState[context].breadcrumbs);
+      }
+      
+      displayManager.renderScreen();
+      return true;
+    }
+    return false;
+  }
+  // ***** END SCOPE: restoreState *****
+  
+  // ***** START SCOPE: clearScreenForPage *****
+  /**
+   * Clear screen for fresh page loads
+   * FIXED: No longer shows C64 header on every page change
+   */
+  function clearScreenForPage() {
+    // Only clear the screen, don't add the C64 header
+    displayManager.setScreenLines([]);
+  }
+  // ***** END SCOPE: clearScreenForPage *****
+
+  // ============================================
+  // KEYBOARD INPUT HANDLING
+  // ============================================
+  
+  // ***** START SCOPE: onKeyDown *****
+  /**
+   * Handle keyboard input for C64-style command entry
+   * @param {KeyboardEvent} e - The keyboard event
+   */
+  function onKeyDown(e) {
+    // ***** START SCOPE: characterInput *****
+    // Handle normal character input
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      let char = e.key.toUpperCase();
+      let currentLine = displayManager.getCurrentLine() + char;
+      displayManager.setCurrentLine(currentLine);
+      displayManager.updatePromptLineOnly();
+      return;
+    }
+    // ***** END SCOPE: characterInput *****
+    
+    // ***** START SCOPE: backspaceHandling *****
+    // Handle backspace to delete characters
+    if (e.key === "Backspace") {
+      e.preventDefault();
+      let currentLine = displayManager.getCurrentLine();
+      if (currentLine.length > 0) {
+        displayManager.setCurrentLine(currentLine.slice(0, -1));
+        displayManager.updatePromptLineOnly();
+      }
+      return;
+    }
+    // ***** END SCOPE: backspaceHandling *****
+    
+    // ***** START SCOPE: enterHandling *****
+    // Handle enter - execute command
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const command = displayManager.getCurrentLine().trim();
+      // Add the command to screen history
+      displayManager.getScreenLines().push({ type: 'text', content: "> " + command.toUpperCase() });
+      displayManager.setCurrentLine("");
+      runCommand(command);
+      displayManager.renderScreen();
+    }
+    // ***** END SCOPE: enterHandling *****
+    
+    // ***** START SCOPE: escapeHandling *****
+    // Handle escape - clear current line
+    if (e.key === "Escape") {
+      e.preventDefault();
+      displayManager.setCurrentLine("");
+      displayManager.updatePromptLineOnly();
+    }
+    // ***** END SCOPE: escapeHandling *****
+  }
+  // ***** END SCOPE: onKeyDown *****
+
+  // ============================================
+  // COMMAND PROCESSING
+  // ============================================
+  
+  // ***** START SCOPE: runCommand *****
+  /**
+   * Main command processor - interprets and executes user commands
+   * @param {string} cmd - The command to execute
+   */
+  function runCommand(cmd) {
+    if (!cmd) return;
+    
+    // ***** START SCOPE: parseCommand *****
+    // Parse the command into parts
+    const normalized = cmd.toLowerCase().trim();
+    const parts = normalized.split(' ');
+    const command = parts[0];
+    const target = parts.slice(1).join(' ');
+    
+    console.log('runCommand:', { cmd, command, target, currentContext });
+    // ***** END SCOPE: parseCommand *****
+    
+    // ***** START SCOPE: commandSwitch *****
+    // Handle different commands
+    switch(command) {
+      // ***** START SCOPE: helpCommand *****
+      case 'help':
+      case '?':
+        showHelp();
+        break;
+      // ***** END SCOPE: helpCommand *****
+        
+      // ***** START SCOPE: loadCommand *****
+      case 'load':
+        handleLoad(target);
+        break;
+      // ***** END SCOPE: loadCommand *****
+        
+      // ***** START SCOPE: listCommand *****
+      case 'list':
+      case 'dir':
+        handleList();
+        break;
+      // ***** END SCOPE: listCommand *****
+        
+      // ***** START SCOPE: clearCommand *****
+      case 'clear':
+      case 'cls':
+        clearScreen();
+        break;
+      // ***** END SCOPE: clearCommand *****
+        
+      // ***** START SCOPE: toggleCommand *****
+      case 'toggle':
+        if (window.displayManager && typeof window.displayManager.toggleView === 'function') {
+          displayManager.toggleView();
+        }
+        break;
+      // ***** END SCOPE: toggleCommand *****
+        
+      // ***** START SCOPE: addCommand *****
+      case 'add':
+        // Only works in products context for adding to cart
+        if (currentContext === 'products' && target) {
+          if (window.cartManager) {
+            cartManager.addToCart(target);
+          }
+        } else if (currentContext === 'products') {
+          displayManager.writeLine("SYNTAX: ADD <PRODUCT NUMBER>");
+        } else {
+          displayManager.writeLine("ADD COMMAND ONLY WORKS FOR PRODUCTS");
+        }
+        break;
+      // ***** END SCOPE: addCommand *****
+       
+      // ***** START SCOPE: gameCommands *****
+      case 'fastload':
+        if (window.gameManager) {
+          if (target === 'on') {
+            gameManager.setFastLoad(true);
+            displayManager.writeLine("FAST LOAD ENABLED");
+          } else if (target === 'off') {
+            gameManager.setFastLoad(false);
+            displayManager.writeLine("FAST LOAD DISABLED");
+          } else {
+            gameManager.toggleFastLoad();
+          }
+        }
+        break;
+
+      case 'warp':
+        if (window.gameManager) {
+          if (target === 'on') {
+            gameManager.setWarpMode(true);
+            displayManager.writeLine("WARP MODE ENABLED");
+          } else if (target === 'off') {
+            gameManager.setWarpMode(false);
+            displayManager.writeLine("WARP MODE DISABLED");
+          } else {
+            gameManager.toggleWarpMode();
+          }
+        }
+        break;
+      
+      case 'play':
+      case 'run':
+        if (window.gameManager) {
+          gameManager.launchByName(target);
+        } else {
+          displayManager.writeLine("GAME MANAGER NOT AVAILABLE");
+        }
+        break;
+        
+      case 'stop':
+      case 'quit':
+        if (window.gameManager) {
+          gameManager.closeGame();
+        } else {
+          displayManager.writeLine("GAME MANAGER NOT AVAILABLE");
+        }
+        break;
+      // ***** END SCOPE: gameCommands *****
+        
+      // ***** START SCOPE: defaultCommand *****
+      default:
+        displayManager.writeLine(`UNKNOWN COMMAND: ${cmd.toUpperCase()}`);
+        displayManager.writeLine("TYPE 'HELP' FOR COMMANDS");
+      // ***** END SCOPE: defaultCommand *****
+    }
+    // ***** END SCOPE: commandSwitch *****
+  }
+  // ***** END SCOPE: runCommand *****
+
+  // ============================================
+  // LOAD COMMAND HANDLER
+  // ============================================
+  
+  // ***** START SCOPE: handleLoad *****
+  /**
+   * Handle LOAD command - the universal navigation/click command
+   * @param {string} target - What to load (page name, item number, or item name)
+   */
+  function handleLoad(target) {
+    // ***** START SCOPE: validateLoadTarget *****
+    if (!target) {
+      displayManager.writeLine("SYNTAX: LOAD <NUMBER OR NAME>");
+      displayManager.writeLine("LOADS (CLICKS) THE ITEM FROM CURRENT LIST");
+      return;
+    }
+    
+    const lowerTarget = target.toLowerCase();
+    // ***** END SCOPE: validateLoadTarget *****
+    
+    // ***** START SCOPE: checkLoadPage *****
+    // Check if loading a page
+    if (VALID_PAGES.includes(lowerTarget)) {
+      loadPage(lowerTarget);
+      return;
+    }
+    // ***** END SCOPE: checkLoadPage *****
+    
+    // ***** START SCOPE: checkLoadCart *****
+    // Special cart handling (only for shop context)
+    if ((lowerTarget === 'cart' || lowerTarget === 'basket') && 
+        (currentContext === 'categories' || currentContext === 'products')) {
+      if (window.cartManager) {
+        cartManager.viewCart();
+      }
+      return;
+    }
+    // ***** END SCOPE: checkLoadCart *****
+    
+    // ***** START SCOPE: handleItemSelection *****
+    // Handle item selection in list contexts
+    if (currentContext === 'categories' || currentContext === 'products' || currentContext === 'programs') {
+      // ***** START SCOPE: loadByNumber *****
+      // Try loading by number (1-based index)
+      const num = parseInt(target);
+      if (!isNaN(num) && num > 0 && num <= currentItems.length) {
+        const item = currentItems[num - 1];
+        clickItem(item);
+        return;
+      }
+      // ***** END SCOPE: loadByNumber *****
+      
+      // ***** START SCOPE: loadByName *****
+      // Try loading by name (partial match)
+      const foundItem = currentItems.find(item => {
+        const itemName = (item.name || item.title || '').toLowerCase();
+        return itemName === lowerTarget || itemName.includes(lowerTarget);
+      });
+      
+      if (foundItem) {
+        clickItem(foundItem);
+        return;
+      }
+      // ***** END SCOPE: loadByName *****
+    }
+    // ***** END SCOPE: handleItemSelection *****
+    
+    // ***** START SCOPE: loadNotFound *****
+    displayManager.writeLine(`"${target.toUpperCase()}" NOT FOUND`);
+    displayManager.writeLine("USE LIST TO SEE AVAILABLE ITEMS");
+    // ***** END SCOPE: loadNotFound *****
+  }
+  // ***** END SCOPE: handleLoad *****
+
+  // ***** START SCOPE: clickItem *****
+  /**
+   * Handle clicking/selecting an item based on current context
+   * @param {Object} item - The item that was clicked
+   */
+  function clickItem(item) {
+    console.log('Clicking item:', item, 'in context:', currentContext);
+    
+    if (currentContext === 'categories') {
+      // Clicking a category loads its products
+      loadCategoryProducts(item.name);
+    } else if (currentContext === 'products') {
+      // Clicking a product shows its detail panel
+      showProductDetail(item);
+    } else if (currentContext === 'programs') {
+      // Clicking a program shows its detail panel
+      showProgramDetail(item);
+    }
+  }
+  // ***** END SCOPE: clickItem *****
+
+  // ============================================
+  // LIST/DIR COMMAND HANDLER
+  // ============================================
+  
+  // ***** START SCOPE: handleList *****
+  /**
+   * Handle LIST/DIR command - shows current directory
+   */
+  function handleList() {
+    switch(currentContext) {
+      // ***** START SCOPE: listCategories *****
+      case 'categories':
+        loadCategoriesView();
+        break;
+      // ***** END SCOPE: listCategories *****
+        
+      // ***** START SCOPE: listProducts *****
+      case 'products':
+        // Refresh product list
+        displayManager.writeLine("REFRESHING LIST...");
+        if (window.viewRenderer && currentItems.length > 0) {
+          viewRenderer.renderProductsView(currentItems);
+        }
+        break;
+      // ***** END SCOPE: listProducts *****
+        
+      // ***** START SCOPE: listPrograms *****
+      case 'programs':
+        // Refresh programs list
+        displayManager.writeLine("REFRESHING LIST...");
+        if (window.viewRenderer && currentItems.length > 0) {
+          viewRenderer.renderProgramsView(currentItems);
+        }
+        break;
+      // ***** END SCOPE: listPrograms *****
+        
+      // ***** START SCOPE: listDefault *****
+      default:
+        // For page contexts, show navigation options
+        displayManager.writeLine("");
+        displayManager.writeLine("CURRENT LOCATION: " + currentContext.toUpperCase());
+        displayManager.writeLine("");
+        displayManager.writeLine("AVAILABLE COMMANDS:");
+        displayManager.writeLine("  LOAD HOME     - Main page");
+        displayManager.writeLine("  LOAD SHOP     - Product catalog");
+        displayManager.writeLine("  LOAD CODE     - Code playground");
+        displayManager.writeLine("  LOAD BBS      - Bulletin board");
+        displayManager.writeLine("  LOAD PRO-PLAY - PRG player");
+        displayManager.writeLine("  LOAD BAS-PLAY - BASIC programs");
+        displayManager.writeLine("");
+        break;
+      // ***** END SCOPE: listDefault *****
+    }
+  }
+  // ***** END SCOPE: handleList *****
+
+  // ============================================
+  // UTILITY COMMANDS
+  // ============================================
+  
+  // ***** START SCOPE: clearScreen *****
+  /**
+   * Clear the screen completely
+   */
+  function clearScreen() {
+    displayManager.setScreenLines([]);
+    displayManager.writeLine("READY.");
+  }
+  // ***** END SCOPE: clearScreen *****
+
+  // ***** START SCOPE: showHelp *****
+  /**
+   * Show context-sensitive help text
+   */
+  function showHelp() {
+    let helpText = `
+SIMPLIFIED C64 COMMANDS
+======================
+
+LOAD <ITEM>  - Click/select item from current list
+               Examples:
+               LOAD 1      - Click first item
+               LOAD 3      - Click third item  
+               LOAD GAMES  - Click "Games" category`;
+    
+    // ***** START SCOPE: cartHelpText *****
+    // Only show cart commands in shop context
+    if (currentContext === 'categories' || currentContext === 'products') {
+      helpText += `
+               LOAD CART   - Open shopping cart
+ADD <NUM>    - Add product to cart`;
+    }
+    // ***** END SCOPE: cartHelpText *****
+    
+    // ***** START SCOPE: playHelpText *****
+    // Show play command in programs context
+    if (currentContext === 'programs') {
+      helpText += `
+
+PLAY <NUM>   - Launch program in emulator
+               Examples:
+               PLAY 1      - Play first program
+               PLAY GAME   - Play program with "game" in name
+STOP         - Close emulator window`;
+    }
+    // ***** END SCOPE: playHelpText *****
+    
+    helpText += `
+
+LIST / DIR   - Show current directory
+TOGGLE       - Toggle between list/grid view
+HELP / ?     - Show this help
+CLEAR / CLS  - Clear screen
+
+TIPS:
+- Numbers refer to items in the list above
+- Names can be partial (LOAD GAM for Games)
+- Context sensitive: what you see is what you can load
+`;
+    displayManager.writeLine(helpText);
+  }
+  // ***** END SCOPE: showHelp *****
+
+  // ============================================
+  // PAGE LOADING
+  // ============================================
+  
+  // ***** START SCOPE: loadPage *****
+  /**
+   * Load a specific page (home, shop, code, etc.)
+   * @param {string} pageName - Name of the page to load
+   */
+  function loadPage(pageName) {
+    // ***** START SCOPE: checkReload *****
+    // Check if we're reloading the current page
+    const isReloadingSamePage = (currentContext === pageName) || 
+                                (pageName === 'shop' && (currentContext === 'categories' || currentContext === 'products')) ||
+                                (pageName === 'bas-play' && currentContext === 'programs');
+    
+    // Save current state before switching (unless reloading same page)
+    if (!isReloadingSamePage) {
+      saveCurrentState();
+    }
+    // ***** END SCOPE: checkReload *****
+    
+    // ***** START SCOPE: preparePageLoad *****
+    // Clear screen for fresh page load
+    clearScreenForPage();
+    
+    displayManager.writeLine(`LOADING ${pageName.toUpperCase()}...`);
+    
+    // Update current context
+    currentContext = pageName;
+    currentItems = []; // Clear items since we're on a page
+    
+    // Update breadcrumbs
+    if (window.viewRenderer) {
+      viewRenderer.updateBreadcrumbs([{ label: pageName.toUpperCase(), type: "text" }]);
+    }
+    // ***** END SCOPE: preparePageLoad *****
+    
+    // ***** START SCOPE: pageSwitch *****
+    // Handle each page
+    switch(pageName) {
+      // ***** START SCOPE: homePage *****
+      case 'home':
+        // FIXED: Don't show duplicate C64 header
+        displayManager.writeLine("");
+        displayManager.writeLine("**** COMMODORE BLUE HOME ****");
+        displayManager.writeLine("");
+        displayManager.writeLine("WELCOME TO THE RETRO COMPUTING STORE");
+        displayManager.writeLine("");
+        displayManager.writeLine("AVAILABLE SECTIONS:");
+        displayManager.writeLine("  LOAD SHOP     - BROWSE PRODUCTS");
+        displayManager.writeLine("  LOAD CODE     - CODE PLAYGROUND");
+        displayManager.writeLine("  LOAD BBS      - BULLETIN BOARD");
+        displayManager.writeLine("  LOAD PRO-PLAY - PRG PLAYER");
+        displayManager.writeLine("  LOAD BAS-PLAY - BASIC PROGRAMS");
+        displayManager.writeLine("");
+        displayManager.writeLine("TYPE 'HELP' FOR COMMANDS");
+        break;
+      // ***** END SCOPE: homePage *****
+        
+      // ***** START SCOPE: shopPage *****
+      case 'shop':
+        // Shop loads categories view
+        currentContext = 'categories';
+        if (isReloadingSamePage || !restoreState('categories')) {
+          loadCategoriesView();
+        }
+        return; // Don't add READY below
+      // ***** END SCOPE: shopPage *****
+        
+      // ***** START SCOPE: codePage *****
+      case 'code':
+        displayManager.writeLine("");
+        displayManager.writeLine("=== CODE PLAYGROUND ===");
+        displayManager.writeLine("");
+        displayManager.writeLine("INTERACTIVE CODING ENVIRONMENT");
+        displayManager.writeLine("COMING SOON!");
+        displayManager.writeLine("");
+        displayManager.writeLine("FEATURES PLANNED:");
+        displayManager.writeLine("- BASIC INTERPRETER");
+        displayManager.writeLine("- 6502 ASSEMBLY");
+        displayManager.writeLine("- SPRITE EDITOR");
+        displayManager.writeLine("- SOUND DESIGNER");
+        break;
+      // ***** END SCOPE: codePage *****
+        
+      // ***** START SCOPE: bbsPage *****
+      case 'bbs':
+        displayManager.writeLine("");
+        displayManager.writeLine("╔═══════════════════════════════╗");
+        displayManager.writeLine("║     COMMODORE BLUE BBS        ║");
+        displayManager.writeLine("╚═══════════════════════════════╝");
+        displayManager.writeLine("");
+        displayManager.writeLine("CONNECTING TO BULLETIN BOARD...");
+        displayManager.writeLine("");
+        displayManager.writeLine("NO CARRIER");
+        displayManager.writeLine("");
+        displayManager.writeLine("(FEATURE COMING SOON)");
+        break;
+      // ***** END SCOPE: bbsPage *****
+        
+      // ***** START SCOPE: proPlayPage *****
+      case 'pro-play':
+        displayManager.writeLine("");
+        displayManager.writeLine("*** PRG PLAYER ***");
+        displayManager.writeLine("");
+        displayManager.writeLine("LOAD AND RUN C64 PROGRAMS");
+        displayManager.writeLine("IN YOUR BROWSER!");
+        displayManager.writeLine("");
+        displayManager.writeLine("DRAG & DROP .PRG FILES HERE");
+        displayManager.writeLine("(COMING SOON)");
+        break;
+      // ***** END SCOPE: proPlayPage *****
+        
+      // ***** START SCOPE: basPlayPage *****
+      case 'bas-play':
+        // BAS-PLAY loads programs from Directus 'programs' collection
+        currentContext = 'programs';
+        if (isReloadingSamePage || !restoreState('programs')) {
+          loadProgramsView();
+        }
+        return; // Don't add READY below
+      // ***** END SCOPE: basPlayPage *****
+        
+      // ***** START SCOPE: defaultPage *****
+      default:
+        displayManager.writeLine(`PAGE '${pageName.toUpperCase()}' NOT IMPLEMENTED YET.`);
+        break;
+      // ***** END SCOPE: defaultPage *****
+    }
+    // ***** END SCOPE: pageSwitch *****
+    
+    displayManager.writeLine("");
+    displayManager.writeLine("READY.");
+  }
+  // ***** END SCOPE: loadPage *****
+
+  // ============================================
+  // CATEGORY VIEW LOADING
+  // ============================================
+  
+  // ***** START SCOPE: loadCategoriesView *****
+  /**
+   * Load categories view (shop landing page)
+   * Fetches categories from API and displays them
+   */
+  function loadCategoriesView() {
+    // Only show loading message when coming from different context
+    if (currentContext !== 'shop' && currentContext !== 'categories') {
+      displayManager.writeLine("LOADING CATEGORIES...");
+    }
+    
+    fetch('collections_api.php')
+      .then(response => response.json())
+      .then(collectionsData => {
+        let collections = Array.isArray(collectionsData) ? collectionsData : [];
+        
+        currentContext = 'categories';
+        currentItems = collections;
+        
+        if (window.viewRenderer) {
+          viewRenderer.setCurrentContext('categories');
+          viewRenderer.updateBreadcrumbs([{ label: "Shop", type: "text" }]);
+          viewRenderer.setCurrentResults(collections);
+          viewRenderer.renderCategoriesView(collections);
+        }
+        displayManager.renderScreen();
+      })
+      .catch(err => {
+        displayManager.writeLine("ERROR LOADING CATEGORIES: " + err.message);
+        displayManager.renderScreen();
+      });
+  }
+  // ***** END SCOPE: loadCategoriesView *****
+
+  // ============================================
+  // PRODUCT VIEW LOADING
+  // ============================================
+  
+  // ***** START SCOPE: loadCategoryProducts *****
+  /**
+   * Load products for a specific category
+   * FIXED: No longer adds duplicate "FOUND X PRODUCTS" message
+   * @param {string} categoryName - Name of the category to load
+   */
+  function loadCategoryProducts(categoryName) {
+    // Save current state before loading products
+    saveCurrentState();
+    
+    displayManager.writeLine(`LOADING ${categoryName.toUpperCase()}...`);
+    
+    if (!window.productServices) {
+      displayManager.writeLine("PRODUCT SERVICES NOT AVAILABLE.");
+      return;
+    }
+    
+    productServices.fetchProducts("", categoryName)
+      .then(products => {
+        currentContext = 'products';
+        currentItems = products;
+        
+        // Store category name for session
+        sessionState.products.categoryName = categoryName;
+        
+        if (window.viewRenderer) {
+          viewRenderer.setCurrentContext('products');
+          viewRenderer.setCurrentResults(products);
+          viewRenderer.updateBreadcrumbs([
+            { label: "Shop", type: "link", action: "load shop" },
+            { label: categoryName, type: "text" }
+          ]);
+          viewRenderer.renderProductsView(products);
+        }
+        
+        // FIXED: Don't add extra text - it's now part of renderProductsView
+        displayManager.renderScreen();
+      })
+      .catch(err => {
+        displayManager.writeLine("ERROR: " + err.message);
+      });
+  }
+  // ***** END SCOPE: loadCategoryProducts *****
+
+  // ============================================
+  // PROGRAM VIEW LOADING
+  // ============================================
+  
+  // ***** START SCOPE: loadProgramsView *****
+  /**
+   * Load programs view (bas-play page)
+   * Fetches programs from the 'programs' collection
+   */
+  function loadProgramsView() {
+    displayManager.writeLine("LOADING PROGRAMS...");
+    
+    // Fetch programs from the 'programs' collection using products_api.php
+    fetch('products_api.php?collection=programs')
+      .then(response => response.json())
+      .then(programsData => {
+        let programs = Array.isArray(programsData) ? programsData : [];
+        
+        currentContext = 'programs';
+        currentItems = programs;
+        
+        if (window.viewRenderer) {
+          viewRenderer.setCurrentContext('programs');
+          viewRenderer.updateBreadcrumbs([{ label: "Programs", type: "text" }]);
+          viewRenderer.setCurrentResults(programs);
+          viewRenderer.renderProgramsView(programs);
+        }
+        
+        displayManager.renderScreen();
+      })
+      .catch(err => {
+        displayManager.writeLine("ERROR LOADING PROGRAMS: " + err.message);
+        displayManager.renderScreen();
+      });
+  }
+  // ***** END SCOPE: loadProgramsView *****
+
+  // ============================================
+  // DETAIL VIEW HANDLERS
+  // ============================================
+  
+  // ***** START SCOPE: showProductDetail *****
+  /**
+   * Show product detail panel with shopping cart functionality
+   * @param {Object} product - The product to display
+   */
+  function showProductDetail(product) {
+    if (window.viewRenderer && typeof window.viewRenderer.renderDetailView === 'function') {
+      viewRenderer.renderDetailView(product);
+      displayManager.writeLine(`LOADED: ${product.name.toUpperCase()}`);
+    } else {
+      displayManager.writeLine("DETAIL VIEW NOT AVAILABLE.");
+    }
+  }
+  // ***** END SCOPE: showProductDetail *****
+
+  // ***** START SCOPE: showProgramDetail *****
+  /**
+   * Show program detail panel (no cart functionality, has emulator)
+   * @param {Object} program - The program to display
+   */
+  function showProgramDetail(program) {
+    if (window.viewRenderer && typeof window.viewRenderer.renderProgramDetailView === 'function') {
+      viewRenderer.renderProgramDetailView(program);
+      displayManager.writeLine(`LOADED: ${program.name.toUpperCase()}`);
+    } else {
+      displayManager.writeLine("DETAIL VIEW NOT AVAILABLE.");
+    }
+  }
+  // ***** END SCOPE: showProgramDetail *****
+
+  // ============================================
+  // MODULE EXPORT
+  // ============================================
+  
+  // ***** START SCOPE: moduleExport *****
+  // Expose the command manager API
+  window.commandManager = {
+    init,
+    runCommand,
+    
+    // Utility functions for other modules
+    writeLine: function(text) {
+      if (window.displayManager && typeof window.displayManager.writeLine === 'function') {
+        displayManager.writeLine(text);
+      }
+    },
+    
+    newPromptLine: function() {
+      if (window.displayManager && typeof window.displayManager.renderScreen === 'function') {
+        displayManager.renderScreen();
+      }
+    },
+    
+    // Expose state functions for debugging
+    saveCurrentState,
+    restoreState,
+    getSessionState: function() { return sessionState; },
+    getCurrentContext: function() { return currentContext; }
+  };
+  // ***** END SCOPE: moduleExport *****
+  
+})();
+// ***** END SCOPE: commandManager *****
+
+==============================
+Path: public\js\emulatorManager.js
+==============================
+// emulatorManager.js - Consolidated C64 emulator management
+// Handles all emulator functionality including vice.js integration
+
+(function() {
+  // Configuration
+  const EMULATOR_CONFIG = {
+    vicePath: '/c64/index.html',
+    viceJsPath: '/c64/js/x64.js',
+    defaultPrgPath: '/basic_programs/',
+    panel: {
+      width: 800,
+      height: 600,
+      top: 100,
+      right: 20
+    }
+  };
+
+  // State
+  let emulatorPanel = null;
+  let currentEmulatorIframe = null;
+  let isEmulatorRunning = false;
+
+  /**
+   * Initialize the emulator manager
+   */
+  function init() {
+    console.log('EmulatorManager initialized');
+    
+    // Listen for window close/unload to clean up
+    window.addEventListener('beforeunload', () => {
+      if (emulatorPanel) {
+        closeEmulator();
+      }
+    });
+  }
+
+  /**
+   * Launch a program in the emulator
+   * @param {Object} program - Program object with file information
+   * @param {HTMLElement} container - Optional container to launch emulator in
+   */
+  function launchProgram(program, container) {
+    if (!program) {
+      if (window.displayManager) {
+        displayManager.writeLine("NO PROGRAM SPECIFIED");
+      }
+      return;
+    }
+
+    console.log('Launching program:', program);
+
+    // Get file URL - ONLY from filename field
+    const fileUrl = getFileUrl(program);
+    if (!fileUrl) {
+      if (window.displayManager) {
+        displayManager.writeLine("NO FILE FOUND FOR: " + (program.name || 'UNKNOWN'));
+      }
+      return;
+    }
+
+    // Close any existing emulator
+    if (isEmulatorRunning) {
+      closeEmulator();
+    }
+
+    if (container) {
+      // Launch in provided container (from uiManager gaming window)
+      loadProgramInContainer(fileUrl, program, container);
+    } else {
+      // Create our own panel (original behavior)
+      createEmulatorPanel();
+      loadProgramInEmulator(fileUrl, program);
+    }
+  }
+
+  /**
+   * Get the executable file URL from program object
+   * ONLY uses the filename field - no fallbacks, no checking other fields
+   */
+  function getFileUrl(program) {
+    // ONLY use the filename field - ignore everything else
+    if (program.filename) {
+      const fullPath = EMULATOR_CONFIG.defaultPrgPath + program.filename;
+      console.log('File URL generated:', fullPath);
+      return fullPath;
+    }
+    console.error('No filename found in program object:', program);
+    return null;
+  }
+
+  /**
+   * Load program in a provided container (for gaming windows)
+   */
+  function loadProgramInContainer(fileUrl, program, container) {
+    if (!container) return;
+    
+    console.log('=== LOADING PROGRAM ===');
+    console.log('Program name:', program.name);
+    console.log('Program filename:', program.filename);
+    console.log('Constructed file URL:', fileUrl);
+    
+    // Clear any existing content in the container first
+    container.innerHTML = '';
+    
+    // First, let's check if the file is accessible
+    console.log('Checking if file exists at:', fileUrl);
+    
+    fetch(fileUrl, { method: 'HEAD' })
+        .then(response => {
+            console.log('File check response:', response.status);
+            if (!response.ok) {
+                throw new Error('File returned status: ' + response.status);
+            }
+            
+            // File exists, now create the iframe
+            const ext = fileUrl.split('.').pop().toLowerCase();
+            const emulatorUrl = new URL(EMULATOR_CONFIG.vicePath, window.location.origin);
+            emulatorUrl.searchParams.set('file', fileUrl);
+            emulatorUrl.searchParams.set('type', ext);
+            emulatorUrl.searchParams.set('name', program.name || 'Program');
+            emulatorUrl.searchParams.set('autostart', 'true');
+            
+            console.log('Loading emulator with URL:', emulatorUrl.toString());
+            
+            // Create iframe in the container
+            const iframe = document.createElement('iframe');
+            iframe.src = emulatorUrl.toString();
+            iframe.style.width = '750px';
+            iframe.style.height = '500px';
+            iframe.style.border = 'none';
+            iframe.style.background = '#000';
+            iframe.setAttribute('allow', 'autoplay; fullscreen');
+            iframe.setAttribute('tabindex', '0'); // Make it focusable
+            
+            container.appendChild(iframe);
+            
+            currentEmulatorIframe = iframe;
+            isEmulatorRunning = true;
+            
+            // Handle load events
+            iframe.onload = () => {
+                console.log('✓ Emulator iframe loaded successfully');
+                
+                // Auto-focus the emulator after loading
+                setTimeout(() => {
+                    // Focus the iframe
+                    iframe.focus();
+                    
+                    // Try to focus the canvas inside the iframe (if accessible)
+                    try {
+                        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                        const canvas = iframeDoc.getElementById('canvas');
+                        if (canvas) {
+                            canvas.focus();
+                            console.log('✓ Emulator canvas focused');
+                        }
+                    } catch (e) {
+                        // Cross-origin restrictions might prevent this
+                        console.log('Could not access iframe content (cross-origin)');
+                    }
+                    
+                    // Focus the iframe window
+                    if (iframe.contentWindow) {
+                        iframe.contentWindow.focus();
+                    }
+                    
+                    // Dispatch a click event to activate it
+                    const clickEvent = new MouseEvent('click', {
+                        view: window,
+                        bubbles: true,
+                        cancelable: true
+                    });
+                    iframe.dispatchEvent(clickEvent);
+                    
+                    console.log('✓ Emulator focused and ready for input');
+                    
+                }, 500); // Wait 500ms for emulator to fully initialize
+                
+                if (window.displayManager) {
+                    displayManager.writeLine('EMULATOR STARTED: ' + (program.name || 'PROGRAM').toUpperCase());
+                }
+            };
+            
+            iframe.onerror = (e) => {
+                console.error('✗ Emulator iframe error:', e);
+                container.innerHTML = '<div style="color: #FF7777; padding: 20px;">ERROR LOADING EMULATOR</div>';
+            };
+        })
+        .catch(error => {
+            console.error('✗ File check failed:', error);
+            container.innerHTML = '<div style="color: #FF7777; padding: 20px;">FILE ERROR: ' + error.message + '</div>';
+        });
+  }
+
+  /**
+   * Create the emulator panel UI
+   */
+  function createEmulatorPanel() {
+    if (emulatorPanel) return;
+
+    const panel = document.createElement('div');
+    panel.id = 'c64-emulator-panel';
+    panel.style.cssText = `
+      position: fixed;
+      top: ${EMULATOR_CONFIG.panel.top}px;
+      right: ${EMULATOR_CONFIG.panel.right}px;
+      width: ${EMULATOR_CONFIG.panel.width}px;
+      height: ${EMULATOR_CONFIG.panel.height}px;
+      background: #000;
+      border: 2px solid #50ff50;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.3s ease;
+      opacity: 0;
+      transform: translateY(20px);
+      box-shadow: 0 4px 20px rgba(80, 255, 80, 0.3);
+    `;
+    
+    panel.innerHTML = `
+      <div class="emulator-header" style="
+        background: #4040a0;
+        color: #fff;
+        padding: 10px;
+        display: flex;
+        align-items: center;
+        cursor: move;
+        font-family: 'C64', monospace;
+        user-select: none;
+      ">
+        <span style="flex: 1;">VICE.JS C64 EMULATOR</span>
+        <button onclick="emulatorManager.toggleFullscreen()" style="
+          margin-right: 10px;
+          background: #7878c8;
+          color: #fff;
+          border: none;
+          padding: 5px 10px;
+          cursor: pointer;
+          font-family: 'C64', monospace;
+        ">⛶</button>
+        <button onclick="emulatorManager.closeEmulator()" style="
+          background: #ff7777;
+          color: #fff;
+          border: none;
+          padding: 5px 10px;
+          cursor: pointer;
+          font-family: 'C64', monospace;
+        ">×</button>
+      </div>
+      <div class="emulator-body" style="
+        flex: 1;
+        overflow: hidden;
+        background: #000;
+        position: relative;
+      ">
+        <div id="emulator-loading" style="
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          color: #50ff50;
+          font-family: 'C64', monospace;
+          text-align: center;
+          z-index: 1;
+        ">
+          LOADING VICE.JS...<br>
+          <span style="font-size: 12px;">PLEASE WAIT</span>
+        </div>
+        <iframe id="emulatorIframe" 
+                src="" 
+                frameborder="0" 
+                style="width: 100%; height: 100%; display: none;"
+                allow="autoplay; fullscreen"
+                tabindex="0">
+        </iframe>
+      </div>
+    `;
+
+    // Make panel draggable
+    makeDraggable(panel);
+
+    document.body.appendChild(panel);
+    emulatorPanel = panel;
+    
+    // Animate in
+    requestAnimationFrame(() => {
+      panel.style.opacity = '1';
+      panel.style.transform = 'translateY(0)';
+    });
+  }
+
+  /**
+   * Make panel draggable by its header
+   */
+  function makeDraggable(panel) {
+    const header = panel.querySelector('.emulator-header');
+    let isDragging = false;
+    let currentX;
+    let currentY;
+    let initialX;
+    let initialY;
+    let xOffset = 0;
+    let yOffset = 0;
+
+    header.addEventListener('mousedown', dragStart);
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('mouseup', dragEnd);
+
+    function dragStart(e) {
+      if (e.target.tagName === 'BUTTON') return;
+      
+      initialX = e.clientX - xOffset;
+      initialY = e.clientY - yOffset;
+      isDragging = true;
+    }
+
+    function drag(e) {
+      if (!isDragging) return;
+      
+      e.preventDefault();
+      currentX = e.clientX - initialX;
+      currentY = e.clientY - initialY;
+      xOffset = currentX;
+      yOffset = currentY;
+
+      panel.style.transform = `translate(${currentX}px, ${currentY}px)`;
+      panel.style.right = 'auto';
+      panel.style.top = EMULATOR_CONFIG.panel.top + 'px';
+    }
+
+    function dragEnd() {
+      isDragging = false;
+    }
+  }
+
+  /**
+   * Load program in the emulator iframe
+   */
+  function loadProgramInEmulator(fileUrl, program) {
+    const iframe = emulatorPanel.querySelector('#emulatorIframe');
+    const loadingDiv = emulatorPanel.querySelector('#emulator-loading');
+    
+    if (!iframe) return;
+
+    // Prepare emulator URL with parameters
+    const ext = fileUrl.split('.').pop().toLowerCase();
+    const emulatorUrl = new URL(EMULATOR_CONFIG.vicePath, window.location.origin);
+    emulatorUrl.searchParams.set('file', fileUrl);
+    emulatorUrl.searchParams.set('type', ext);
+    emulatorUrl.searchParams.set('name', program.name || 'Program');
+    emulatorUrl.searchParams.set('autostart', 'true');
+
+    console.log('Loading emulator with URL:', emulatorUrl.toString());
+
+    // Set iframe source
+    iframe.src = emulatorUrl.toString();
+    currentEmulatorIframe = iframe;
+    isEmulatorRunning = true;
+
+    // Handle load events
+    iframe.onload = () => {
+      console.log('Emulator iframe loaded');
+      setTimeout(() => {
+        loadingDiv.style.display = 'none';
+        iframe.style.display = 'block';
+        
+        // Auto-focus the emulator
+        iframe.focus();
+        
+        // Try to focus the canvas inside
+        try {
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+          const canvas = iframeDoc.getElementById('canvas');
+          if (canvas) {
+            canvas.focus();
+          }
+        } catch (e) {
+          console.log('Could not access iframe content');
+        }
+        
+        if (iframe.contentWindow) {
+          iframe.contentWindow.focus();
+        }
+        
+        console.log('✓ Emulator focused and ready');
+      }, 1000);
+      
+      if (window.displayManager) {
+        displayManager.writeLine('EMULATOR STARTED: ' + (program.name || 'PROGRAM').toUpperCase());
+      }
+    };
+
+    iframe.onerror = (e) => {
+      console.error('Emulator load error:', e);
+      loadingDiv.innerHTML = 'ERROR LOADING EMULATOR<br><span style="color: #ff7777;">CHECK CONSOLE</span>';
+      if (window.displayManager) {
+        displayManager.writeLine('ERROR: EMULATOR FAILED TO LOAD');
+      }
+    };
+  }
+
+  /**
+   * Close the emulator
+   */
+  function closeEmulator() {
+    if (currentEmulatorIframe) {
+      currentEmulatorIframe.src = 'about:blank';
+      currentEmulatorIframe = null;
+    }
+
+    if (emulatorPanel) {
+      emulatorPanel.style.opacity = '0';
+      emulatorPanel.style.transform = 'translateY(20px)';
+      
+      setTimeout(() => {
+        if (emulatorPanel) {
+          emulatorPanel.remove();
+          emulatorPanel = null;
+        }
+      }, 300);
+    }
+
+    isEmulatorRunning = false;
+
+    if (window.displayManager) {
+      displayManager.writeLine("EMULATOR CLOSED");
+    }
+  }
+
+  /**
+   * Toggle fullscreen for the emulator
+   */
+  function toggleFullscreen() {
+    if (currentEmulatorIframe) {
+      if (currentEmulatorIframe.requestFullscreen) {
+        currentEmulatorIframe.requestFullscreen();
+      } else if (currentEmulatorIframe.webkitRequestFullscreen) {
+        currentEmulatorIframe.webkitRequestFullscreen();
+      } else if (currentEmulatorIframe.msRequestFullscreen) {
+        currentEmulatorIframe.msRequestFullscreen();
+      }
+    }
+  }
+
+  /**
+   * Launch by name or index (for command integration)
+   */
+  function launchByName(target) {
+    if (!target) {
+      if (window.displayManager) {
+        displayManager.writeLine("SYNTAX: PLAY <PROGRAM NAME OR NUMBER>");
+      }
+      return;
+    }
+
+    // Get current programs list from viewRenderer
+    const currentResults = window.viewRenderer ? viewRenderer.getCurrentResults() : [];
+    const currentContext = window.viewRenderer ? viewRenderer.getCurrentContext() : '';
+
+    if (currentContext !== 'programs') {
+      if (window.displayManager) {
+        displayManager.writeLine("PLAY COMMAND ONLY WORKS IN PROGRAMS CONTEXT");
+        displayManager.writeLine("USE: LOAD BAS-PLAY");
+      }
+      return;
+    }
+
+    // Try to find by index
+    const index = parseInt(target);
+    if (!isNaN(index) && index > 0 && index <= currentResults.length) {
+      launchProgram(currentResults[index - 1]);
+      return;
+    }
+
+    // Try to find by name
+    const lowerTarget = target.toLowerCase();
+    const program = currentResults.find(p => 
+      (p.name || '').toLowerCase() === lowerTarget ||
+      (p.name || '').toLowerCase().includes(lowerTarget)
+    );
+
+    if (program) {
+      launchProgram(program);
+    } else {
+      if (window.displayManager) {
+        displayManager.writeLine("PROGRAM NOT FOUND: " + target.toUpperCase());
+      }
+    }
+  }
+
+  /**
+   * Check if emulator is running
+   */
+  function isRunning() {
+    return isEmulatorRunning;
+  }
+
+  // Public API
+  window.emulatorManager = {
+    init,
+    launchProgram,
+    launchByName,
+    closeEmulator,
+    toggleFullscreen,
+    isRunning,
+    getFileUrl,
+    // Aliases for compatibility
+    launchGame: launchProgram,
+    closeGame: closeEmulator,
+    isGameRunning: isRunning
+  };
+
+  // Auto-initialize when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+  
+  console.log('EmulatorManager loaded and initialized');
+})();
+
+==============================
+Path: public\js\productServices.js
+==============================
+// public/js/productServices.js
+(function() {
+  async function fetchProducts(query = "", collection = null) {
+    // Debug: Log what's being requested
+    console.log('Fetching products - Query:', query, 'Collection:', collection);
+    
+    try {
+      let endpoint = "products_api.php";
+      const params = [];
+      if (query) {
+        params.push("query=" + encodeURIComponent(query));
+      }
+      if (collection) {
+        params.push("collection=" + encodeURIComponent(collection));
+      }
+      if (params.length) {
+        endpoint += "?" + params.join("&");
+      }
+
+      const response = await fetch(endpoint);
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Debug: Log raw response
+      console.log('=== RAW API RESPONSE ===');
+      console.log('Collection:', collection);
+      console.log('Number of items returned:', data.length);
+      console.log('First 3 items:', data.slice(0, 3));
+      console.log('=== END RAW RESPONSE ===');
+      
+      const mappedProducts = data.map(prod => {
+        // Ensure price and stock are numeric:
+        prod.price = parseFloat(prod.price);
+        if (isNaN(prod.price)) {
+          prod.price = 0;
+        }
+        prod.stock = parseInt(prod.stock, 10);
+        if (isNaN(prod.stock)) {
+          prod.stock = 0;
+        }
+
+        // Standardize property names
+        prod.id = prod.product_id;
+        prod.image = prod.image_url;
+        // Include the preview URL if provided
+        prod.preview_url = prod.preview_url || '';
+
+        return prod;
+      });
+      
+      // Debug: Log mapped products
+      console.log('=== MAPPED PRODUCTS DEBUG ===');
+      console.log('Collection:', collection);
+      console.log('Products returned:', mappedProducts.length);
+      mappedProducts.forEach((prod, idx) => {
+        console.log(`Product ${idx}:`, {
+          id: prod.product_id,
+          name: prod.name,
+          image_url: prod.image_url,
+          files: prod.files,
+          files_count: prod.files ? prod.files.length : 0,
+          hasImageUrl: !!prod.image_url,
+          hasFiles: !!prod.files && prod.files.length > 0
+        });
+      });
+      console.log('=== END PRODUCTS DEBUG ===');
+      
+      return mappedProducts;
+    } catch (error) {
+      console.error("API fetch failed:", error);
+      if (window.displayManager) {
+        displayManager.writeLine(`Could not connect to product database. Error: ${error.message}`);
+      }
+      return [];
+    }
+  }
+
+  function sortResults(criteria) {
+    const currentResults = viewRenderer.getCurrentResults();
+    if (!currentResults || !currentResults.length) {
+      displayManager.writeLine("No active results to sort.\n");
+      return;
+    }
+    let c = criteria.toLowerCase();
+    if (c === "price asc" || c === "price up") {
+      currentResults.sort((a, b) => (a.price || 0) - (b.price || 0));
+    } else if (c === "price desc" || c === "price down") {
+      currentResults.sort((a, b) => (b.price || 0) - (a.price || 0));
+    } else if (c === "popular" || c === "pop") {
+      currentResults.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+    } else if (c === "newest" || c === "new") {
+      currentResults.sort((a, b) => {
+        if (a.dateAdded && b.dateAdded) {
+          return new Date(b.dateAdded) - new Date(a.dateAdded);
+        }
+        return 0;
+      });
+    } else {
+      displayManager.writeLine("Unknown sort criteria.\n");
+      return;
+    }
+    viewRenderer.setCurrentSort(c);
+    displayManager.writeLine(`Sorted results by ${criteria}.`);
+
+    const currentContext = viewRenderer.getCurrentContext();
+    if (currentContext === 'categories') {
+      viewRenderer.renderCategoriesView(currentResults);
+    } else {
+      viewRenderer.renderProductsView(currentResults);
+    }
+    displayManager.renderScreen();
+  }
+
+  window.productServices = {
+    fetchProducts,
+    sortResults
+  };
+})();
+
+==============================
+Path: public\js\themeManager.js
+==============================
+// themeManager.js - Applies unified styling for all grid views, pagination, and detail panels
+
+(function() {
+  if (!window.UI_CONFIG) {
+    console.error("ThemeManager Error: UI_CONFIG not found. Ensure uiConfig.js is loaded first.");
+    return;
+  }
+
+  const { theme, layout, pagination } = window.UI_CONFIG;
+  const gridCfg = layout.grid;
+  const detailCfg = layout.detailPanel;
+
+  // Grid item sizing
+  const itemSize = gridCfg.itemSize || gridCfg.itemMinWidth || 200;
+  const gap = gridCfg.gap || 16;
+  const padding = gridCfg.itemPadding != null ? gridCfg.itemPadding : Math.floor(gap / 2);
+  const borderWidth = gridCfg.borderWidth || 2;
+  const borderColor = gridCfg.borderColor || theme.colors.text;
+  const bgColor = gridCfg.bgColor || theme.colors.secondary;
+  const hoverBorderColor = gridCfg.hoverBorderColor || theme.colors.accent;
+
+  // Remove old styles
+  const existing = document.getElementById('dynamic-theme-styles');
+  if (existing) existing.remove();
+
+  const style = document.createElement('style');
+  style.id = 'dynamic-theme-styles';
+  style.textContent = `
+    /* Theme Manager: Unified Grid, Pagination, Detail Pane & Hover Preview */
+
+    /* Core Typography & Colors */
+    *, *::before, *::after {
+      font-family: ${theme.fontFamily}, monospace;
+    }
+    body {
+      background: ${theme.colors.primary};
+      color: ${theme.colors.text};
+    }
+
+    /* GRID LAYOUT */
+    .grid-container-wrapper {
+      display: flex;
+      justify-content: center;
+      padding: ${gap}px 0;
+    }
+    .muuri-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(${itemSize}px, ${itemSize}px));
+      grid-auto-rows: ${itemSize}px;
+      gap: ${gap}px;
+      justify-content: start;
+    }
+    /* Override Muuri positioning */
+    .muuri-grid .grid-item {
+      position: relative !important;
+      transform: none !important;
+    }
+
+    /* GRID ITEM BASE */
+    .grid-item {
+      width: ${itemSize}px;
+      height: ${itemSize}px;
+      background-color: ${bgColor};
+      padding: ${padding}px;
+      border: ${borderWidth}px solid ${borderColor};
+      box-sizing: border-box;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .grid-item:hover {
+      border-color: ${hoverBorderColor};
+    }
+
+    /* CATEGORY OVERRIDE */
+    .grid-item.category-item {
+      background-color: ${theme.colors.primary};
+      border-color: ${theme.colors.primary};
+    }
+    .grid-item.category-item:hover {
+      border-color: ${hoverBorderColor};
+    }
+
+    /* PRODUCT CARD */
+    .grid-item.product-card {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background-color: ${bgColor};
+    }
+    .product-card .product-card-image {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+    }
+    .product-card .product-card-info {
+      margin-top: ${padding}px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* PROGRAM HOVER PREVIEW */
+    .program-mini-desc {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.8);
+      color: ${theme.colors.text};
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: ${padding}px;
+      box-sizing: border-box;
+      font-size: 0.9rem;
+    }
+    .grid-item:hover .program-mini-desc {
+      display: flex;
+    }
+
+    /* UNIFORM PAGINATION */
+    .pagination {
+      text-align: center;
+      margin: ${gap}px 0;
+    }
+    .pagination a, .pagination span {
+      display: inline-block;
+      margin: 0 ${gap / 2}px;
+      padding: ${padding / 2}px ${padding * 1.5}px;
+      border: ${borderWidth}px solid ${borderColor};
+      color: ${theme.colors.text};
+      text-decoration: none;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .pagination a:hover {
+      border-color: ${hoverBorderColor};
+      color: ${hoverBorderColor};
+    }
+    .pagination span.current {
+      background-color: ${theme.colors.accent};
+      border-color: ${theme.colors.accent};
+      color: #000;
+    }
+
+    /* DETAIL PANEL SLIDE-IN */
+    .detail-panel {
+      position: fixed;
+      top: ${detailCfg.baseTopOffset}px;
+      right: 0;
+      width: ${detailCfg.width}px;
+      height: ${detailCfg.height}px;
+      background: ${theme.colors.secondary};
+      border: ${borderWidth}px solid ${borderColor};
+      box-sizing: border-box;
+      transform: translateX(${detailCfg.width + 20}px);
+      transition: transform 0.3s ease-in-out;
+      z-index: 2000;
+      overflow: auto;
+    }
+    .detail-panel.open {
+      transform: translateX(0);
+    }
+
+  `.trim();
+
+  document.head.appendChild(style);
+})();
+
+
+==============================
+Path: public\js\uiManager.js
+==============================
+// public/js/uiManager.js - Simplified version with all UI logic
+// This file manages all user interface rendering and interactions
+
+(function() {
+  'use strict';
+  
+  console.log('uiManager.js: Starting initialization...');
+  
+  try {
+    // ============================================
+    // CONFIGURATION SECTION
+    // ============================================
+    // All configurable values in one place for easy modification
+    const CONFIG = {
+      viewMode: 'list',              // Default view: 'list' or 'grid'
+      itemsPerPage: 10,              // How many items to show per page
+      truncateLength: 80,            // Default text truncation length
+      programTruncateLength: 50,     // Truncation for program descriptions in grid
+      gamingWindowTruncateLength: 300 // Truncation for gaming window descriptions
+    };
+
+    // ============================================
+    // STATE MANAGEMENT
+    // ============================================
+    // These variables track the current state of the UI
+    let currentPage = 1;                    // Current pagination page
+    const PROMPT_SYMBOL = '> ';             // C64-style command prompt
+    const IMAGE_VERSION = '1.0.3';          // For cache-busting images
+    let screenLines = [];                   // Array of lines displayed on screen
+    let currentLine = '';                   // Current command being typed
+    let c64Output = null;                   // Reference to main output div
+    let devConsoleEl = null;                // Reference to dev console (if exists)
+    let devLogLines = [];                   // Dev console log lines
+    let currentContext = 'products';        // What type of items we're viewing
+    let currentResults = [];                // Array of current items being displayed
+    let currentBreadcrumbs = [];            // Navigation breadcrumbs
+    let currentSort = null;                 // Current sort order
+    let currentSearchKeyword = '';          // Current search term
+    let currentSearchFilters = {};          // Current filter settings
+    let activeDetailPanels = [];            // Array of open detail panels
+    let activeGamingWindows = [];           // Array of open gaming windows
+
+    // ============================================
+    // HELPER FUNCTIONS
+    // ============================================
+    
+    /**
+     * Truncates text to specified length, breaking at word boundaries
+     * @param {string} text - Text to truncate
+     * @param {number} maxChars - Maximum character length
+     * @returns {string} Truncated text with ellipsis if needed
+     */
+    function truncateDescription(text, maxChars) {
+      const finalMaxChars = maxChars || CONFIG.truncateLength;
+      if (!text || text.length <= finalMaxChars) return text || '';
+      const truncated = text.substring(0, finalMaxChars);
+      const lastSpace = truncated.lastIndexOf(' ');
+      return truncated.substring(0, lastSpace) + '...';
+    }
+
+    /**
+     * Gets a slice of items for the current page
+     * @param {Array} items - All items
+     * @param {number} page - Page number (1-based)
+     * @returns {Array} Items for the current page
+     */
+    function getPaginatedItems(items, page = 1) {
+      const start = (page - 1) * CONFIG.itemsPerPage;
+      return items.slice(start, start + CONFIG.itemsPerPage);
+    }
+
+    /**
+     * Generates HTML for pagination controls
+     * @param {number} totalItems - Total number of items
+     * @param {number} page - Current page number
+     * @returns {string} HTML string for pagination
+     */
+    function getPaginationHTML(totalItems, page) {
+      const totalPages = Math.ceil(totalItems / CONFIG.itemsPerPage);
+      if (totalPages <= 1) return '';
+      
+      let html = '<div class="pagination">';
+      
+      // Previous page link
+      if (page > 1) {
+        html += `<a href="#" onclick="window.changePage(${page - 1});return false;">&lt;</a>`;
+      }
+      
+      // Page numbers
+      for (let i = 1; i <= totalPages; i++) {
+        if (i === page) {
+          // Current page (no link, just highlighted)
+          html += `<span class="current-page">${i}</span>`;
+        } else {
+          // Other pages (clickable links)
+          html += `<a href="#" onclick="window.changePage(${i});return false;">${i}</a>`;
+        }
+      }
+      
+      // Next page link
+      if (page < totalPages) {
+        html += `<a href="#" onclick="window.changePage(${page + 1});return false;">&gt;</a>`;
+      }
+      
+      html += '</div>';
+      return html;
+    }
+
+    /**
+     * Gets the URL for a collection/category image
+     * @param {Object|string} col - Collection object or name
+     * @returns {string} Image URL
+     */
+    function getCollectionImageUrl(col) {
+      const v = '?v=' + IMAGE_VERSION;
+      const name = (col && col.name) ? col.name.toUpperCase() : (typeof col === 'string' ? col.toUpperCase() : 'DEFAULT');
+      return `/images_products/${name}.png${v}`;
+    }
+
+    /**
+     * Gets the rollover image URL for a collection
+     * @param {Object|string} col - Collection object or name
+     * @returns {string} Rollover image URL
+     */
+    function getCollectionRolloverImageUrl(col) {
+      const v = '?v=' + IMAGE_VERSION;
+      const name = (col && col.name) ? col.name.toUpperCase() : (typeof col === 'string' ? col.toUpperCase() : 'DEFAULT_ROLL');
+      return `/images_products/${name}_ROLL.png${v}`;
+    }
+
+    /**
+     * Gets the image URL for a product, with fallback to generated image
+     * @param {Object} product - Product object
+     * @returns {string} Image URL
+     */
+    function getImageUrl(product) {
+      return (product && product.image_url) ? product.image_url
+           : generateProductImage(product?.name, '#4040a0');
+    }
+
+    /**
+     * Generates a placeholder SVG image for products without images
+     * @param {string} name - Product name
+     * @param {string} color - Background color
+     * @returns {string} Data URL for SVG image
+     */
+    function generateProductImage(name = 'Product', color = '#4040a0') {
+      const enc = encodeURIComponent(name);
+      return `data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect fill='${encodeURIComponent(color)}' width='200' height='200'/%3E%3Ctext fill='%23fff' font-family='sans-serif' font-size='18' x='100' y='100' text-anchor='middle'%3E${enc}%3C/text%3E%3C/svg%3E`;
+    }
+
+    /**
+     * Generates a C64-style program image
+     * @param {string} name - Program name
+     * @param {string} type - Program type (BASIC, PRG, etc.)
+     * @returns {string} Data URL for SVG image
+     */
+    function generateProgramImage(name = 'Program', type = 'BASIC') {
+      const n = encodeURIComponent(name);
+      const t = encodeURIComponent(type);
+      return `data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect fill='%234040a0' width='200' height='200'/%3E%3Ctext fill='%2350ff50' font-family='monospace' font-size='24' x='100' y='60' text-anchor='middle'%3E${t}%3C/text%3E%3Ctext fill='%23ffffff' font-family='monospace' font-size='16' x='100' y='100' text-anchor='middle'%3E${n}%3C/text%3E%3Ctext fill='%237878c8' font-family='monospace' font-size='14' x='100' y='140' text-anchor='middle'%3ELOAD%20%22${n}%22%3C/text%3E%3Ctext fill='%237878c8' font-family='monospace' font-size='14' x='100' y='160' text-anchor='middle'%3ERUN%3C/text%3E%3C/svg%3E`;
+    }
+
+    /**
+     * Handles collection image load errors by using default image
+     * @param {HTMLImageElement} img - Image element that failed to load
+     */
+    function handleCollectionImageError(img) {
+      img.src = '/images_products/DEFAULT.png';
+      img.onerror = null; // Prevent infinite error loop
+    }
+
+    // ============================================
+    // INITIALIZATION
+    // ============================================
+    
+    /**
+     * Initializes the UI manager with the output element
+     * @param {HTMLElement} outputEl - The main output div element
+     */
+    function init(outputEl) {
+      console.log('uiManager: init called');
+      c64Output = outputEl;
+      devConsoleEl = document.getElementById('devConsole');
+      
+      // Try to restore view mode from session storage
+      try {
+        const mode = sessionStorage.getItem('viewMode');
+        if (mode === 'list' || mode === 'grid') CONFIG.viewMode = mode;
+      } catch (e) {
+        console.error('uiManager: sessionStorage error', e);
+      }
+    }
+
+    // ============================================
+    // DEV CONSOLE FUNCTIONS
+    // ============================================
+    
+    /**
+     * Logs a message to the dev console (if it exists)
+     * @param {string} msg - Message to log
+     */
+    function devLog(msg) {
+      if (!devConsoleEl) return;
+      devLogLines.push(msg);
+      if (devLogLines.length > 4) devLogLines.shift(); // Keep only last 4 lines
+      devConsoleEl.innerHTML = devLogLines.join('<br>');
+    }
+
+    /**
+     * Toggles dev console visibility
+     * @param {boolean} show - Optional: force show/hide
+     */
+    function toggleDevConsole(show) {
+      if (!devConsoleEl) return;
+      devConsoleEl.style.display = (show === undefined)
+        ? (devConsoleEl.style.display === 'none' ? 'block' : 'none')
+        : (show ? 'block' : 'none');
+    }
+
+    // ============================================
+    // SCREEN OUTPUT FUNCTIONS
+    // ============================================
+    
+    /**
+     * Writes a line of text to the screen
+     * @param {string} text - Text to write (can include newlines)
+     */
+    function writeLine(text = '') {
+      text.split('\n').forEach(line => screenLines.push({ type: 'text', content: line }));
+      renderScreen();
+    }
+
+    /**
+     * Writes HTML content to the screen
+     * @param {string} html - HTML to write
+     */
+    function writeHTML(html) {
+      screenLines.push({ type: 'html', content: html });
+      renderScreen();
+    }
+
+    /**
+     * Renders all screen content including the command prompt
+     */
+    function renderScreen() {
+      if (!c64Output) return;
+      
+      // Remove existing prompt line if any
+      const prevPrompt = c64Output.querySelector('[data-prompt-line]');
+      if (prevPrompt) {
+        const br = prevPrompt.previousSibling;
+        if (br && br.nodeName === 'BR') br.remove();
+        prevPrompt.remove();
+      }
+      
+      // Build HTML from screen lines
+      const html = screenLines.map(l => l.type === 'html'
+        ? l.content
+        : l.content.replace(/</g, '&lt;').replace(/>/g, '&gt;') // Escape HTML in text
+      ).join('<br>');
+      
+      // Set content
+      c64Output.innerHTML = html;
+      
+      // Add line break before prompt if there's content
+      if (html) c64Output.appendChild(document.createElement('br'));
+      
+      // Add command prompt
+      const promptEl = document.createElement('span');
+      promptEl.setAttribute('data-prompt-line', '');
+      promptEl.textContent = PROMPT_SYMBOL + currentLine;
+      c64Output.appendChild(promptEl);
+      
+      // Scroll to bottom
+      c64Output.scrollTop = c64Output.scrollHeight;
+      
+      // Set up grid event handlers if in grid mode
+      if (CONFIG.viewMode === 'grid') setTimeout(setupGridEventHandlers, 10);
+    }
+    
+    /**
+     * Updates just the prompt line (more efficient for typing)
+     */
+    function updatePromptLineOnly() {
+      if (!c64Output) return;
+      let promptEl = c64Output.querySelector('[data-prompt-line]');
+      if (!promptEl) {
+        if (c64Output.lastChild) c64Output.appendChild(document.createElement('br'));
+        promptEl = document.createElement('span');
+        promptEl.setAttribute('data-prompt-line', '');
+        c64Output.appendChild(promptEl);
+      }
+      promptEl.textContent = PROMPT_SYMBOL + currentLine;
+      c64Output.scrollTop = c64Output.scrollHeight;
+    }
+
+    /**
+     * Clears the current command line
+     */
+    function newLine() {
+      currentLine = '';
+      renderScreen();
+    }
+
+    /**
+     * Updates the screen with new result set (categories, products, etc.)
+     * FIXED: Properly handles mixed text and HTML content
+     * @param {string|Array} output - Content to display
+     */
+    function updateResultSet(output) {
+      screenLines = [];
+      
+      // Add breadcrumbs if any
+      if (currentBreadcrumbs.length) {
+        const bcHtml = currentBreadcrumbs.map(bc =>
+          bc.type === 'link'
+            ? `<a href='#' onclick="commandManager.runCommand('${bc.action}${bc.param ? ' ' + bc.param : ''}');return false;">${bc.label}</a>`
+            : bc.label
+        ).join(' > ');
+        screenLines.push({ type: 'html', content: `<div class="breadcrumbs">Location: ${bcHtml}</div>` });
+      }
+      
+      // Add the output - FIXED to handle mixed content properly
+      if (typeof output === 'string') {
+        screenLines.push({ type: /<[^>]+>/.test(output) ? 'html' : 'text', content: output });
+      } else if (Array.isArray(output)) {
+        output.forEach(line => {
+          // Handle different line formats
+          if (typeof line === 'object' && line.type) {
+            // Line already has type specified (like {type: 'html', content: '...'})
+            screenLines.push(line);
+          } else if (typeof line === 'object' && line.content) {
+            // Line has content property but no type
+            const content = line.content;
+            screenLines.push({ type: /<[^>]+>/.test(content) ? 'html' : 'text', content: content });
+          } else {
+            // Plain string
+            const str = String(line);
+            screenLines.push({ type: /<[^>]+>/.test(str) ? 'html' : 'text', content: str });
+          }
+        });
+      }
+    }
+
+    // ============================================
+    // PAGINATION FUNCTIONS
+    // ============================================
+    
+    /**
+     * Changes to a different page of results
+     * @param {number} page - Page number to change to
+     */
+    function changePage(page) {
+      currentPage = page;
+      const ctx = currentContext;
+      
+      // Call the appropriate render function based on context
+      const fn = ctx === 'categories' ? renderCategoriesView
+               : ctx === 'programs'   ? renderProgramsView
+               : renderProductsView;
+      
+      fn(currentResults);
+      renderScreen();
+    }
+
+    /**
+     * Toggles between list and grid view
+     */
+    function toggleView() {
+      CONFIG.viewMode = (CONFIG.viewMode === 'list' ? 'grid' : 'list');
+      
+      // Save preference
+      try { sessionStorage.setItem('viewMode', CONFIG.viewMode); } catch (e) {}
+      
+      // Re-render current view
+      (currentContext === 'categories' ? renderCategoriesView
+        : currentContext === 'programs' ? renderProgramsView
+        : renderProductsView)(currentResults);
+      renderScreen();
+    }
+
+    // ============================================
+    // GRID EVENT HANDLERS
+    // ============================================
+    
+    /**
+     * Sets up mouse event handlers for grid items (rollover effects)
+     */
+    function setupGridEventHandlers() {
+      document.querySelectorAll('.collection-image').forEach(img => {
+        const normal = img.dataset.normal;
+        const roll = img.dataset.rollover;
+        const pre = new Image(); 
+        let ready = false;
+        
+        // Preload rollover image
+        pre.src = roll;
+        pre.onload = () => { ready = true; };
+        
+        // Mouse events
+        img.onmouseenter = () => { if (ready) img.src = roll; };
+        img.onmouseleave = () => { img.src = normal; };
+        img.onerror = () => handleCollectionImageError(img);
+      });
+    }
+
+    // ============================================
+    // CATEGORY RENDERING
+    // ============================================
+    
+    /**
+     * Main function to render categories in current view mode
+     * @param {Array} categories - Array of category objects
+     */
+    function renderCategoriesView(categories) { 
+      updateResultSet(
+        CONFIG.viewMode === 'list' ? renderCategoriesInListView(categories) : renderCategoriesInGridView(categories)
+      ); 
+    }
+
+    /**
+     * Renders categories as a C64-style text list
+     * @param {Array} categories - Array of category objects
+     * @returns {Array} Array of text lines to display
+     */
+    function renderCategoriesInListView(categories) {
+      const out = ['<span class="directory-title">"CATEGORIES DIRECTORY"       QTY</span>',''];
+      const list = getPaginatedItems(categories, currentPage);
+      const start = (currentPage - 1) * CONFIG.itemsPerPage;
+      
+      list.forEach((cat,i) => {
+        const idx = String(start+i+1).padStart(3,' ');        // Right-align index
+        const name = (cat.name||'UNNAMED').toUpperCase();
+        const cnt  = cat.count||0;
+        out.push(`${idx}  <a href='#' onclick="commandManager.runCommand('load ${encodeURIComponent(cat.name)}');return false;">"${name}"</a> ${cnt}`);
+      });
+      
+      out.push('','', getPaginationHTML(categories.length, currentPage),'','<span class="blocks-free">525 BLOCKS FREE.</span>');
+      return out;
+    }
+
+    /**
+     * Renders categories as a visual grid with images
+     * @param {Array} categories - Array of category objects
+     * @returns {Array} Array containing HTML for grid display
+     */
+    function renderCategoriesInGridView(categories) {
+      let html = '<div class="grid-container-wrapper"><div class="simple-grid">';
+      
+      getPaginatedItems(categories, currentPage).forEach(cat => {
+        const name = (cat.name || 'UNNAMED').toUpperCase();
+        const id = encodeURIComponent(name);
+        const norm = getCollectionImageUrl(cat);
+        const roll = getCollectionRolloverImageUrl(cat);
+        
+        html += `<div class="grid-item category-item" onclick="commandManager.runCommand('load ${id}');">` +
+          `<img src="${norm}" data-normal="${norm}" data-rollover="${roll}" class="collection-image">` +
+          `</div>`;
+      });
+      
+      html += '</div></div>' + getPaginationHTML(categories.length, currentPage) + '<div class="blocks-free-grid">525 BLOCKS FREE.</div>';
+      return [html];
+    }
+
+    // ============================================
+    // PRODUCT RENDERING
+    // ============================================
+    
+    /**
+     * Main function to render products in current view mode
+     * @param {Array} items - Array of product objects
+     */
+    function renderProductsView(items) { 
+      updateResultSet(
+        CONFIG.viewMode === 'list' ? renderProductsInListView(items) : renderProductsInGridView(items)
+      ); 
+    }
+
+    /**
+     * Renders products as a C64-style text list
+     * @param {Array} items - Array of product objects
+     * @returns {Array} Array of text lines to display
+     */
+    function renderProductsInListView(items) {
+      if (!items?.length) return ['No products found.'];
+      
+      const out = ['<span class="directory-title">"PRODUCT DIRECTORY"         PRICE</span>',''];
+      const page = getPaginatedItems(items, currentPage);
+      const start = (currentPage - 1) * CONFIG.itemsPerPage;
+      
+      page.forEach((p,i) => {
+        const idx = String(start+i+1).padStart(3,' ');
+        const name = (p.name||'UNNAMED').toUpperCase();
+        const price = '$'+(p.price||0).toFixed(2);
+        out.push(`${idx}  <a href='#' onclick="viewRenderer.openDetailByIndex(${start+i});return false;">"${name}"</a> ${price}`);
+      });
+      
+      out.push('','', getPaginationHTML(items.length, currentPage),'','<span class="blocks-free">525 BLOCKS FREE.</span>','READY.');
+      return out;
+    }
+
+    /**
+     * Renders products as a visual grid with images
+     * FIXED: Now includes "FOUND X PRODUCTS" message and returns mixed content array
+     * @param {Array} items - Array of product objects
+     * @returns {Array} Array containing HTML for grid display
+     */
+    function renderProductsInGridView(items) {
+      if (!items?.length) return ['No products found.'];
+      
+      // FIXED: Build array with text and HTML objects
+      let output = [];
+      
+      // Add the product count message
+      output.push('');  // Empty line for spacing
+      output.push(`FOUND ${items.length} PRODUCTS.`);
+      output.push('');  // Empty line for spacing
+      
+      // Build the grid HTML
+      let html = '<div class="grid-container-wrapper"><div class="simple-grid">';
+      
+      getPaginatedItems(items, currentPage).forEach((p, i) => {
+        const idx = (currentPage - 1) * CONFIG.itemsPerPage + i;
+        const img = p.image_url || p.files?.[0] || generateProductImage(p.name);
+        const name = p.name || 'Product';
+        const desc = truncateDescription(p.description, CONFIG.truncateLength);
+        const price = '$' + (p.price || 0).toFixed(2);
+        
+        // Uses same structure as programs - square grid items with overlay
+        html += `
+          <div class="grid-item" onclick="viewRenderer.openDetailByIndex(${idx});">
+            <img src="${img}" class="product-image">
+            <div class="product-name">${name}</div>
+            <div class="product-price">${price}</div>
+            <div class="product-mini-desc">${desc}</div>
+          </div>`;
+      });
+      
+      html += '</div></div>' + getPaginationHTML(items.length, currentPage);
+      
+      // Add HTML as object with type
+      output.push({ type: 'html', content: html });
+      
+      // Add footer text
+      output.push('');
+      output.push('<span class="blocks-free">525 BLOCKS FREE.</span>');
+      output.push('READY.');
+      
+      return output;
+    }
+
+    // ============================================
+    // PROGRAM RENDERING
+    // ============================================
+    
+    /**
+     * Main function to render programs in current view mode
+     * @param {Array} ps - Array of program objects
+     */
+    function renderProgramsView(ps) { 
+      updateResultSet(
+        CONFIG.viewMode ==='list' ? renderProgramsInListView(ps) : renderProgramsInGridView(ps)
+      ); 
+    }
+
+    /**
+     * Renders programs as a C64-style text list
+     * @param {Array} ps - Array of program objects
+     * @returns {Array} Array of text lines to display
+     */
+    function renderProgramsInListView(ps) {
+      if (!ps?.length) return ['No programs found.'];
+      
+      const out=['<span class="directory-title">"PROGRAMS DIRECTORY"         TYPE</span>',''];
+      const page=getPaginatedItems(ps, currentPage);
+      const start=(currentPage - 1) * CONFIG.itemsPerPage;
+      
+      page.forEach((pr,i)=>{
+        const idx=String(start+i+1).padStart(3,' ');
+        const name=(pr.name||'UNNAMED').toUpperCase();
+        const type=(pr.filetype||'BASIC').toUpperCase();
+        out.push(`${idx}  <a href='#' onclick="commandManager.runCommand('load ${start+i+1}');return false;">"${name}"</a> ${type}`);
+      });
+      
+      out.push('','',getPaginationHTML(ps.length,currentPage),'','<span class="blocks-free">525 BLOCKS FREE.</span>','READY.');
+      return out;
+    }
+
+    /**
+     * Renders programs as a visual grid with images
+     * @param {Array} ps - Array of program objects
+     * @returns {Array} Array containing HTML for grid display
+     */
+    function renderProgramsInGridView(ps) {
+      if (!ps?.length) return ['No programs found.'];
+      
+      let html = '<div class="grid-container-wrapper"><div class="simple-grid">';
+      
+      getPaginatedItems(ps, currentPage).forEach((pr, i) => {
+        const idx = (currentPage - 1) * CONFIG.itemsPerPage + i;
+        const img = pr.image_url || pr.files?.[0] || pr.screenshot || generateProgramImage(pr.name, pr.filetype);
+        const name = pr.name || 'Unnamed';
+        const type = (pr.filetype || 'BASIC').toUpperCase();
+        const desc = truncateDescription(pr.description, CONFIG.programTruncateLength);
+        
+        html += `
+          <div class="grid-item" onclick="commandManager.runCommand('load ${idx + 1}');">
+            <img src="${img}" class="program-image">
+            <div class="program-name">${name}</div>
+            <div class="program-type">${type}</div>
+            <div class="program-mini-desc">${desc}</div>
+          </div>`;
+      });
+      
+      html += '</div></div>' + getPaginationHTML(ps.length, currentPage) + '<div class="blocks-free-grid">525 BLOCKS FREE.</div><div class="ready-line">READY.</div>';
+      return [html];
+    }
+
+    // ============================================
+    // DETAIL PANEL FUNCTIONS
+    // ============================================
+    
+    /**
+     * Opens a sliding detail panel for a product
+     * @param {Object} product - Product to display
+     */
+    function openDetailPanel(product) {
+      if (!product) { writeLine('Product not found.'); return; }
+      
+      // Check if panel already exists for this product
+      const existing = activeDetailPanels.find(p=>p.productId===product.id);
+      if (existing) { highlightPanel(existing); return; }
+      
+      // Create new panel
+      const panel=document.createElement('div'); 
+      panel.className='detail-panel';
+      
+      // Gather all media files
+      const files=product.files||[];
+      let media=[...(product.image_url?[product.image_url]:[]),...files];
+      if(!media.length) media=[generateProductImage(product.name)];
+      
+      // Select main media (prefer images over videos)
+      const main=media.find(m=>!m.endsWith('.mp4'))||media[0];
+      const mainHtml=main.endsWith('.mp4')
+        ? `<video controls autoplay muted loop><source src="${main}" type="video/mp4"></video>`
+        : `<img src="${main}" />`;
+      
+      // Generate thumbnails
+      let thumbs=''; 
+      media.forEach(m=>{
+        thumbs+=m.endsWith('.mp4')
+          ? `<div class="thumbnail video-thumb" onclick="swapDetailMedia('${m}')"><video muted src="${m}"></video><div class="play-icon">▶</div></div>`
+          : `<div class="thumbnail" onclick="swapDetailMedia('${m}')"><img src="${m}"/></div>`;
+      });
+      
+      // Build panel HTML
+      panel.innerHTML=`
+        <div class="detail-panel-header">
+          <button class="close-btn">×</button>
+          <span class="detail-panel-title">${product.name}</span>
+          <button class="buy-btn snipcart-add-item"
+            data-item-id="${product.id}"
+            data-item-price="${product.price}"
+            data-item-name="${product.name}"
+            data-item-image="${product.image_url||''}"
+            data-item-url="${window.location.href}">Add to Cart</button>
+        </div>
+        <div class="detail-panel-body">
+          <p>Price: $${(product.price||0).toFixed(2)}</p>
+          <p>${product.description||'No description.'}</p>
+          <div class="detail-images"><div id="mainMediaContainer">${mainHtml}</div><div class="thumbnail-strip">${thumbs}</div></div>
+        </div>`;
+      
+      // Set up panel object and events
+      const panelObj={ element:panel, productId:product.id };
+      panel.querySelector('.close-btn').onclick=()=>{ explodePanel(panelObj); };
+      
+      // Add to DOM and track
+      activeDetailPanels.push(panelObj);
+      document.body.appendChild(panel);
+      
+      // Animate in
+      setTimeout(()=>panel.classList.add('open'),10);
+      
+      // Reposition all panels
+      reflowDetailPanels();
+    }
+
+    /**
+     * Shows explosion animation and hides panel
+     * @param {Object} pObj - Panel object to explode
+     */
+    function explodePanel(pObj) { 
+      showExplosion(pObj); 
+      pObj.element.style.visibility='hidden'; 
+      setTimeout(()=>removeDetailPanel(pObj), 600); 
+    }
+    
+    /**
+     * Removes detail panel from DOM and tracking
+     * @param {Object} pObj - Panel object to remove
+     */
+    function removeDetailPanel(pObj) {
+      const i=activeDetailPanels.indexOf(pObj);
+      if(i!==-1) activeDetailPanels.splice(i,1);
+      pObj.element.classList.remove('open');
+      setTimeout(()=>{ 
+        if(document.body.contains(pObj.element)) pObj.element.remove(); 
+        reflowDetailPanels(); 
+      }, 600);
+    }
+
+    /**
+     * Repositions all detail panels in a stacked arrangement
+     */
+    function reflowDetailPanels() {
+      activeDetailPanels.forEach((p,i)=>{
+        p.element.style.top = (40 + i * 60) + 'px';  // Stack vertically
+        p.element.style.zIndex = (1000 + i).toString(); // Layer properly
+      });
+    }
+
+    /**
+     * Highlights a panel temporarily (when clicking duplicate)
+     * @param {Object} pObj - Panel object to highlight
+     */
+    function highlightPanel(pObj) {
+      pObj.element.classList.add('highlight');
+      setTimeout(()=>pObj.element.classList.remove('highlight'),1500);
+    }
+
+    /**
+     * Creates explosion animation effect
+     * @param {Object} pObj - Panel object to explode
+     */
+    function showExplosion(pObj) {
+      const rect=pObj.element.getBoundingClientRect();
+      const cfg={ 
+        frames:9,       // Number of animation frames
+        dur:80,         // Duration per frame (ms)
+        mult:4,         // Size multiplier
+        path:'images/explode/BOOM_${index}.png', 
+        start:1, 
+        end:0.1, 
+        dissolve:300 
+      };
+      
+      // Create explosion container
+      const container=document.createElement('div');
+      container.style.position='fixed';
+      const w=rect.width*cfg.mult, h=rect.height*cfg.mult;
+      container.style.left=`${rect.left+rect.width/2-w/2}px`;
+      container.style.top=`${rect.top- h/2}px`;
+      container.style.width=`${w}px`; 
+      container.style.height=`${h}px`;
+      container.style.zIndex='3000'; 
+      container.style.pointerEvents='none';
+      document.body.appendChild(container);
+      
+      // Create frames
+      const frames=[];
+      for(let i=1;i<=cfg.frames;i++){
+        const img=document.createElement('img');
+        img.src=cfg.path.replace('${index}',i);
+        img.style.position='absolute'; 
+        img.style.width='100%'; 
+        img.style.height='100%'; 
+        img.style.objectFit='contain'; 
+        img.style.opacity=0;
+        container.appendChild(img); 
+        frames.push(img);
+      }
+      
+      // Animate frames
+      let f=0;
+      const step=()=>{
+        frames.forEach(fr=>{ fr.style.opacity=0; });
+        if(f>=cfg.frames){ 
+          container.style.transition=`opacity ${cfg.dissolve}ms ease-out`; 
+          container.style.opacity=0; 
+          return setTimeout(()=>container.remove(),cfg.dissolve); 
+        }
+        frames[f].style.opacity=String((1 - f/(cfg.frames-1))*(1-cfg.end)+cfg.end);
+        f++; 
+        setTimeout(step,cfg.dur);
+      };
+      setTimeout(step,50);
+    }
+
+    // ============================================
+    // GAMING WINDOW FUNCTIONS
+    // ============================================
+    
+    /**
+     * Creates a gaming window for programs (with emulator support)
+     * @param {Object} pr - Program object
+     */
+    function renderProgramDetailView(pr) {
+      let main = pr.files?.[0] || pr.image_url || generateProgramImage(pr.name, pr.filetype);
+      const preview = `<div class="game-preview"><img src="${main}"></div>`;
+      
+      // Check if window already exists
+      const exist = activeGamingWindows.find(w => w.programId === pr.product_id);
+      if (exist) { highlightGamingWindow(exist); return; }
+      
+      // Create new gaming window
+      const win = document.createElement('div'); 
+      win.className = 'gaming-window'; 
+      win.dataset.programId = pr.product_id;
+      const descriptionHtml = truncateDescription(pr.description, CONFIG.gamingWindowTruncateLength);
+      
+      win.innerHTML = `
+          <div class="header">🎮 ${pr.name.toUpperCase()}<button class="close-btn">×</button></div>
+          <div class="body">${preview}<div class="info"><h3>TYPE: ${pr.filetype.toUpperCase()}</h3><p>${descriptionHtml}</p><button class="play-btn">▶ PLAY</button><button class="stop-btn" style="display:none;">◼ STOP</button></div></div>`;
+      
+      // Set up window object and events
+      const wObj = { element: win, programData: pr, isPlaying: false };
+      win.querySelector('.close-btn').onclick = () => closeGamingWindow(wObj);
+      win.querySelector('.play-btn').onclick = () => launchGameInWindow(wObj);
+      win.querySelector('.stop-btn').onclick = () => stopGameInWindow(wObj);
+      
+      // Add to DOM and track
+      activeGamingWindows.push(wObj);
+      document.body.appendChild(win);
+      positionGamingWindow(wObj);
+      
+      // Animate in
+      setTimeout(() => win.classList.add('open'), 10);
+    }
+
+    /**
+     * Launches emulator in the gaming window
+     * @param {Object} winObj - Window object
+     */
+    function launchGameInWindow(winObj) {
+      const area=winObj.element.querySelector('.game-preview');
+      if(!window.emulatorManager?.launchProgram) { 
+        area.innerHTML='<div style="color:#F77;">Emulator not loaded</div>'; 
+        return; 
+      }
+      try{ 
+        window.emulatorManager.launchProgram(winObj.programData,area); 
+      }catch(e){ 
+        area.innerHTML=`<div style="color:#F77;">ERROR: ${e.message}</div>`; 
+        return; 
+      }
+      winObj.isPlaying=true;
+      winObj.element.querySelector('.play-btn').style.display='none';
+      winObj.element.querySelector('.stop-btn').style.display='inline-block';
+    }
+
+    /**
+     * Stops emulator and restores preview
+     * @param {Object} winObj - Window object
+     */
+    function stopGameInWindow(winObj) {
+      const area=winObj.element.querySelector('.game-preview');
+      area.innerHTML=`<img src="${winObj.programData.files?.[0]||winObj.programData.image_url||generateProgramImage(winObj.programData.name)}"/>`;
+      winObj.isPlaying=false;
+      winObj.element.querySelector('.play-btn').style.display='inline-block';
+      winObj.element.querySelector('.stop-btn').style.display='none';
+      window.emulatorManager?.closeEmulator();
+    }
+
+    /**
+     * Highlights existing gaming window
+     * @param {Object} winObj - Window object to highlight
+     */
+    function highlightGamingWindow(winObj) {
+      winObj.element.classList.add('highlight');
+      setTimeout(()=>winObj.element.classList.remove('highlight'),1500);
+    }
+
+    /**
+     * Closes and removes gaming window
+     * @param {Object} winObj - Window object to close
+     */
+    function closeGamingWindow(winObj) {
+      if(winObj.isPlaying) stopGameInWindow(winObj);
+      const idx=activeGamingWindows.indexOf(winObj);
+      if(idx!==-1) activeGamingWindows.splice(idx,1);
+      winObj.element.classList.remove('open');
+      setTimeout(()=>winObj.element.remove(),300);
+    }
+
+    /**
+     * Positions gaming window with cascading effect
+     * @param {Object} winObj - Window object to position
+     */
+    function positionGamingWindow(winObj) {
+      const idx=activeGamingWindows.indexOf(winObj)+1;
+      winObj.element.style.position='fixed';
+      winObj.element.style.left='50%'; 
+      winObj.element.style.top='50%';
+      // Cascade windows diagonally
+      winObj.element.style.transform=`translate(-50%,-50%) translate(${(idx-1)*30}px,${(idx-1)*30}px)`;
+      winObj.element.style.zIndex=(9999+idx).toString();
+    }
+
+    /**
+     * Swaps main media in detail panel
+     * @param {string} url - URL of media to display
+     */
+    function swapDetailMedia(url) {
+      const c=document.getElementById('mainMediaContainer');
+      if(!c) return;
+      c.innerHTML = url.endsWith('.mp4')
+        ? `<video controls autoplay muted loop><source src="${url}" type="video/mp4"></video>`
+        : `<img src="${url}"/>`;
+    }
+
+    // Legacy function aliases
+    function swapDetailImage(url) { swapDetailMedia(url); }
+    function forceImageRefresh() { /* No longer needed */ }
+    function updateImageVersion(newV) { /* No longer needed */ }
+    function updateToggleButton() { /* Stub for compatibility */ }
+
+    // ============================================
+    // PUBLIC API EXPORTS
+    // ============================================
+    
+    // Export display manager functions
+    window.displayManager = {
+      init, devLog, toggleDevConsole,
+      writeLine, writeHTML, renderScreen,
+      newLine, updateResultSet, toggleView,
+      updatePromptLineOnly, updateToggleButton,
+      
+      // State getters/setters
+      getScreenLines:()=>screenLines,
+      setScreenLines:lines=>{ screenLines=lines; },
+      getCurrentLine:()=>currentLine,
+      setCurrentLine:line=>{ currentLine=line; },
+      getViewMode:()=>CONFIG.viewMode
+    };
+
+    // Export view rendering functions
+    window.viewRenderer = {
+      renderCategoriesView, renderProductsView, renderProgramsView,
+      renderDetailView: openDetailPanel, renderProgramDetailView,
+      openStackedDetailPanel: openDetailPanel, removeDetailPanel, reflowDetailPanels,
+      
+      // State management
+      resetPage:()=>{ currentPage=1; },
+      updateBreadcrumbs: bc=>{ currentBreadcrumbs=bc; },
+      getCurrentBreadcrumbs:()=>currentBreadcrumbs,
+      getCurrentResults:()=>currentResults,
+      setCurrentResults:rs=>{ currentResults=rs; },
+      getCurrentSort:()=>currentSort,
+      setCurrentSort:s=>{ currentSort=s; },
+      getCurrentContext:()=>currentContext,
+      setCurrentContext:c=>{ currentContext=c; },
+      getCurrentSearchKeyword:()=>currentSearchKeyword,
+      setCurrentSearchKeyword:k=>{ currentSearchKeyword=k; },
+      getCurrentSearchFilters:()=>currentSearchFilters,
+      setCurrentSearchFilters:f=>{ currentSearchFilters=f; },
+      getImageUrl, 
+      
+      // Helper to open detail by index
+      openDetailByIndex: idx => {
+        if (currentResults[idx]) openDetailPanel(currentResults[idx]);
+      }
+    };
+
+    // Simplified grid manager (stub for compatibility)
+    window.gridManager = { 
+      initializeMuuri:()=>{}, 
+      getGridConfig:()=>({ itemMinWidth: 200, gap: 16 }), 
+      getCurrentResultSetId:()=>null, 
+      setCurrentResultSetId:()=>{} 
+    };
+    
+    // Global utility exports
+    window.getCollectionImageUrl = getCollectionImageUrl;
+    window.getCollectionRolloverImageUrl = getCollectionRolloverImageUrl;
+    window.activeGamingWindows = activeGamingWindows;
+    window.uiManager = window.displayManager; // Alias for compatibility
+    window.changePage = changePage;
+    window.swapDetailMedia = swapDetailMedia;
+
+    // ============================================
+    // EVENT LISTENERS
+    // ============================================
+    
+    // Wait for DOM to be ready
+    document.addEventListener('DOMContentLoaded', function() { 
+      console.log('uiManager: DOMContentLoaded');
+    });
+    
+    // Wait for Snipcart to be ready
+    document.addEventListener('snipcart.ready', function() { 
+      console.log('uiManager: Snipcart ready');
+    });
+    
+    console.log('uiManager.js: Initialization complete');
+    
+  } catch (error) {
+    console.error('uiManager.js: Fatal error during initialization:', error);
+    console.error('Stack trace:', error.stack);
+  }
+})();
+
+==============================
+Path: public\js\uiConfig.js
+==============================
+// public/js/uiConfig.js
+// This file contains the single source of truth for all UI configuration.
+// It is loaded first and exposes the config globally via window.UI_CONFIG.
+// public/js/uiConfig.js
+(function() {
+  const UI_CONFIG = {
+    // … existing stuff …
+
+    // --- Layout & Sizing (in pixels) ---
+    layout: {
+      grid: {
+        itemMinWidth: 200,
+        gap: 16      // only for grid gutters
+      },
+      nav: {
+        gap: 8       // new: only for nav & menu spacing
+      },
+      detailPanel: {
+        width: 400,
+        height: 550,
+        baseTopOffset: 40,
+        stackSpacing: 60,
+        removeDelay: 600,
+      },
+      gamingWindow: {
+        totalHeight: 440,
+        gameWidth: 640
+      }
+    }
+  };
+
+  window.UI_CONFIG = UI_CONFIG;
+})();
+
+(function() {
+  const UI_CONFIG = {
+    // --- General Behavior ---
+    viewMode: 'list', // 'list' or 'grid'
+    truncation: {
+      default: 50,
+      productDescription: 80,
+      programDescription: 50, // This is for the grid view overlay
+      gamingWindowDescription: 300 // This is for the gaming window's detail panel
+    },
+    pagination: {
+      itemsPerPage: 10,
+    },
+
+    // --- Theming & Colors ---
+    theme: {
+      fontFamily: "'C64', monospace",
+      colors: {
+        primary: '#4040a0',   // Dark blue
+        secondary: '#7878c8', // Light blue
+        accent: '#50ff50',    // Green
+        text: '#ffffff',
+        background: '#000000',
+      }
+    },
+     
+    // --- Layout & Sizing (in pixels) ---
+    layout: {
+      grid: {
+        itemMinWidth: 200,
+        gap: 20
+      },
+      detailPanel: {
+        width: 400,
+        height: 550,
+        baseTopOffset: 40,
+        stackSpacing: 60,
+        removeDelay: 600,
+      },
+      gamingWindow: {
+        totalHeight: 440,    // Total window height
+        gameWidth: 640,      // Width of game/preview area
+        // gameHeight is calculated dynamically from gameWidth
+      }
+    }
+  };
+
+  // Expose the config globally so all other scripts can access it.
+  window.UI_CONFIG = UI_CONFIG;
+
+})();
+
+==============================
+Path: public\c64\index.html
+==============================
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+  <meta charset="UTF-8">
+  <title>C64 Emulator - Vice.js</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #000;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    #canvas {
+      border: 0px none; /* CRITICAL: No border or padding for mouse coords */
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      outline: none; /* Remove focus outline */
+    }
+    #canvas:focus {
+      outline: 2px solid #50ff50; /* Green outline when focused */
+    }
+    #loading {
+      position: absolute;
+      color: #50ff50;
+      font-family: 'C64', monospace;
+      font-size: 20px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">LOADING VICE.JS...</div>
+  <canvas id="canvas" tabindex="0" style="border: 0px none;"></canvas>
+  
+  <script>
+    // Get parameters from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const fileUrl = urlParams.get('file');
+    const fileType = urlParams.get('type') || 'prg';
+    const fileName = urlParams.get('name') || 'program';
+    const autostart = urlParams.get('autostart') === 'true';
+    
+    console.log('Emulator parameters:', { fileUrl, fileType, fileName, autostart });
+    
+    // Function to focus the canvas
+    function focusCanvas() {
+      const canvas = document.getElementById('canvas');
+      if (canvas) {
+        canvas.focus();
+        console.log('Canvas focused');
+        
+        // Also click it to ensure activation
+        canvas.click();
+        
+        // Check if focused
+        if (document.activeElement === canvas) {
+          console.log('Canvas successfully has focus');
+        } else {
+          console.log('Canvas focus failed, retrying...');
+          setTimeout(focusCanvas, 500);
+        }
+      }
+    }
+    
+    // Listen for focus requests from parent
+    window.addEventListener('message', function(event) {
+      if (event.data === 'focus') {
+        console.log('Focus request received from parent');
+        focusCanvas();
+      }
+    });
+    
+    // Function to load file from URL
+    async function loadFileFromUrl(url, filename) {
+      console.log('Fetching file from:', url);
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const arrayBuffer = await response.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        console.log('File loaded, size:', uint8Array.length);
+        
+        // Store for preRun
+        window.fileData = uint8Array;
+        window.fileName = filename + '.' + fileType;
+        
+        // Now start the emulator
+        startEmulator();
+      } catch (error) {
+        console.error('Error loading file:', error);
+        const loadingDiv = document.getElementById('loading');
+        loadingDiv.innerHTML = 'ERROR LOADING FILE<br><span style="color: #ff7777;">' + error.message + '</span>';
+      }
+    }
+    
+    // Function to set up filesystem
+    function setupFileSystem() {
+      console.log('Setting up filesystem...');
+      if (window.fileData && window.fileName) {
+        try {
+          FS.createDataFile('/', window.fileName, window.fileData, true, true);
+          console.log('File created in FS:', window.fileName);
+        } catch (e) {
+          console.error('FS.createDataFile error:', e);
+        }
+      }
+    }
+    
+    // Audio detection
+    function audioDetected() {
+      return (typeof AudioContext === 'function') || 
+             (typeof webkitAudioContext === 'function');
+    }
+    
+    // Start the emulator
+    function startEmulator() {
+      console.log('Starting emulator...');
+      
+      // Build arguments
+      let args = [];
+      
+      // Add audio configuration
+      if (audioDetected()) {
+        args = args.concat(['-soundsync', '0', '-soundrate', '22050', '-soundfragsize', '2']);
+      } else {
+        args.push('+sound');
+      }
+      
+      // Add autostart if requested
+      if (autostart && window.fileName) {
+        args.push('-autostart');
+        args.push(window.fileName);
+      }
+      
+      console.log('Module arguments:', args);
+      
+      // Configure Module for vice.js
+      window.Module = {
+        preRun: [setupFileSystem],
+        postRun: [],
+        arguments: args,
+        canvas: document.getElementById('canvas'),
+        
+        print: function(text) {
+          console.log(text);
+        },
+        
+        printErr: function(text) {
+          console.error(text);
+        },
+        
+        setStatus: function(text) {
+          const loadingDiv = document.getElementById('loading');
+          if (text) {
+            loadingDiv.textContent = text;
+          } else {
+            loadingDiv.style.display = 'none';
+          }
+        },
+        
+        onRuntimeInitialized: function() {
+          console.log('VICE.js runtime initialized');
+          Module.setStatus('');
+          
+          // Auto-focus the canvas after emulator is ready
+          setTimeout(function() {
+            focusCanvas();
+            
+            // Also try to grab keyboard focus
+            const canvas = document.getElementById('canvas');
+            if (canvas) {
+              // Make sure it's focusable
+              canvas.tabIndex = 0;
+              
+              // Try multiple focus methods
+              canvas.focus();
+              canvas.click();
+              
+              // Force keyboard focus
+              canvas.addEventListener('click', function() {
+                this.focus();
+              });
+              
+              console.log('Emulator ready and focused');
+            }
+          }, 100);
+        },
+        
+        totalDependencies: 0,
+        
+        monitorRunDependencies: function(left) {
+          this.totalDependencies = Math.max(this.totalDependencies, left);
+          Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+        }
+      };
+      
+      window.onerror = function(message, source, lineno, colno, error) {
+        console.error('Window error:', message, 'at', source + ':' + lineno);
+        Module.setStatus('Exception thrown, see JavaScript console');
+        Module.setStatus = function(text) {
+          if (text) Module.printErr('[post-exception status] ' + text);
+        };
+      };
+      
+      // Load the vice.js emulator
+      const script = document.createElement('script');
+      script.src = 'js/x64.js';
+      script.async = true;
+      document.body.appendChild(script);
+    }
+    
+    // Initialize - load file first if provided
+    if (fileUrl) {
+      // Clean up the filename for the virtual FS
+      const cleanFileName = fileName.replace(/[^a-zA-Z0-9_-]/g, '_');
+      loadFileFromUrl(fileUrl, cleanFileName);
+    } else {
+      // No file specified, just start the emulator
+      startEmulator();
+    }
+    
+    // Auto-focus when page loads
+    window.addEventListener('load', function() {
+      setTimeout(focusCanvas, 1000);
+    });
+    
+    // Focus when clicked anywhere on the page
+    document.addEventListener('click', function() {
+      focusCanvas();
+    });
+  </script>
+</body>
+</html>
+
+==============================
+Path: public\index.html
+==============================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Commodore Blue - Retro Computing Store</title>
+  
+  <!-- Force no caching -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  
+  <!-- Cache bust parameter and clear caches -->
+  <script>
+    // Version-based cache busting - INCREMENT THIS when you deploy changes
+    window.APP_VERSION = '1.0.5'; // Change this number when you update files
+    window.CACHE_BUST = Date.now();
+    
+    // Check if version changed
+    const STORAGE_KEY = 'app_version';
+    const lastVersion = localStorage.getItem(STORAGE_KEY);
+    
+    if (lastVersion !== window.APP_VERSION) {
+      console.log('New version detected (was ' + lastVersion + ', now ' + window.APP_VERSION + '), clearing caches...');
+      
+      // Clear all caches
+      if ('caches' in window) {
+        caches.keys().then(names => {
+          names.forEach(name => {
+            console.log('Clearing cache:', name);
+            caches.delete(name);
+          });
+        });
+      }
+      
+      // Unregister service workers
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          registrations.forEach(registration => {
+            registration.unregister();
+            console.log('Service worker unregistered');
+          });
+        });
+      }
+      
+      // Update stored version
+      localStorage.setItem(STORAGE_KEY, window.APP_VERSION);
+    }
+    
+    // Force clear function for manual use
+    window.forceClearAllCaches = function() {
+      if ('caches' in window) {
+        caches.keys().then(names => {
+          Promise.all(names.map(name => caches.delete(name))).then(() => {
+            console.log('All caches cleared');
+          });
+        });
+      }
+      
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          Promise.all(registrations.map(r => r.unregister())).then(() => {
+            console.log('All service workers unregistered');
+            localStorage.removeItem(STORAGE_KEY);
+            window.location.reload(true);
+          });
+        });
+      }
+    };
+  </script>
+  
+  <!-- Snipcart CSS -->
+  <link rel="preconnect" href="https://app.snipcart.com">
+  <link rel="preconnect" href="https://cdn.snipcart.com">
+  <link rel="stylesheet" href="https://cdn.snipcart.com/themes/v3.4.1/default/snipcart.css" />
+  
+  <!-- Main site stylesheet with cache busting -->
+  <script>
+    document.write('<link rel="stylesheet" href="css/style.css?v=' + window.APP_VERSION + '" />');
+  </script>
+</head>
+<body>
+  <!-- C64 3-Row Container -->
+  <div class="c64-container">
+    <!-- Row 1: Top Marquee (full width) -->
+    <div class="c64-top-marquee">
+      <div class="marquee-text">
+        WELCOME TO COMMODOREBLUE.COM YOUR ONE STOP RETRO HANGOUT *** CLASSIC GAMES *** UPGRADES *** BUNDLES *** AUTHENTIC C64 EXPERIENCE ***
+      </div>
+    </div>
+
+    <!-- Row 2: Main Content (3 columns) -->
+    <div class="c64-main-row">
+      <!-- Left Column: Navigation -->
+      <div class="c64-left-column">
+        <div class="menu-button" data-page="home">HOME</div>
+        <div class="menu-button" data-page="shop">SHOP</div>
+        <div class="menu-button" data-page="code">CODE</div>
+        <div class="menu-button" data-page="bbs">BBS</div>
+        <div class="menu-button" data-page="pro-play">PRG PLAY</div>
+        <div class="menu-button" data-page="bas-play">BAS PLAY</div>
+      </div>
+      
+      <!-- Center Column: Main Content -->
+      <div class="c64-center-column">
+        <div id="c64Screen">
+          <div id="c64Output"></div>
+        </div>
+      </div>
+      
+      <!-- Right Column: Commands -->
+      <div class="c64-right-column">
+        <button class="commands-trigger help-trigger">[HELP]</button>
+        <button class="commands-trigger" onclick="if(window.displayManager) displayManager.toggleView()">[TOGGLE]</button>
+        <div class="commands-popup" style="display: none;">
+          <table width="100%" border="1" style="border-collapse: collapse;">
+            <tr>
+              <th colspan="2" style="text-align: center; padding: 5px; background-color: var(--secondary-color);">C64 COMMANDS - LOAD = CLICK</th>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px; width: 40%;">LOAD &lt;ITEM&gt;</td>
+              <td style="text-align: left; padding: 3px 8px; width: 60%;">Click/select item from list</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LOAD 1</td>
+              <td style="text-align: left; padding: 3px 8px;">Click first item in list</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LOAD GAMES</td>
+              <td style="text-align: left; padding: 3px 8px;">Click "Games" category</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LOAD CART</td>
+              <td style="text-align: left; padding: 3px 8px;">Open shopping cart</td>
+            </tr>
+            <tr>
+              <td colspan="2" style="background-color: var(--primary-color); padding: 2px;"></td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LIST / DIR</td>
+              <td style="text-align: left; padding: 3px 8px;">Show current directory</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">HELP / ?</td>
+              <td style="text-align: left; padding: 3px 8px;">Show full help</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">CLEAR / CLS</td>
+              <td style="text-align: left; padding: 3px 8px;">Clear screen</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 3: Bottom Status Bar (full width) -->
+    <div class="c64-bottom-bar">
+      <!-- Output Log -->
+      <div class="output-log" id="outputLog">
+        > LOG EVENTS LISTED HERE<br>
+        > LOAD SHOP
+      </div>
+      
+      <!-- Control Buttons -->
+      <div class="control-buttons">
+        <button id="userActionBtn" class="control-button login-button">LOGIN</button>
+        <!-- Add cache clear button for development -->
+        <button onclick="forceClearAllCaches()" style="background: #ff4444; color: white; padding: 2px 6px; font-size: 10px; margin-left: 5px;">CLEAR CACHE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden input capturing keystrokes -->
+  <input type="text" id="keyCapture" spellcheck="false" autocomplete="off"
+         style="position:absolute; left:-9999px; top:-9999px; opacity:0;" />
+
+  <!-- Snipcart checkout button (hidden) -->
+  <button class="snipcart-checkout" style="display:none !important;"></button>
+
+  <!-- Snipcart container for checkout modal -->
+  <div hidden id="snipcart" data-config-modal-style="side" data-api-key="ZWI3N2VhMWEtNDQyNy00ZGY4LWE0YmYtNzBlYTc4MWZiZWZlNjM4NzY2NDM4MDM3MzExMDE2"></div>
+
+  <!-- Google API for OAuth -->
+  <script src="https://apis.google.com/js/api.js"></script>
+
+  <!-- Load Google config dynamically from PHP -->
+  <script>
+    document.write('<script src="config.php?js&v=' + window.APP_VERSION + '"><\/script>');
+  </script>
+
+  <!-- Our scripts with cache busting - SIMPLIFIED LIST -->
+  <script>
+    // Load all scripts with cache busting
+    const scripts = [
+      'js/productServices.js',
+      'js/uiManager.js',          // Now contains all UI logic
+      'js/emulatorManager.js',
+      'js/cartManager.js',
+      'js/commandManager.js',
+      'js/c64Syntax.js',
+      'js/userManager.js'
+    ];
+    
+    scripts.forEach(src => {
+      document.write('<script src="' + src + '?v=' + window.APP_VERSION + '"><\/script>');
+    });
+  </script>
+  
+  <!-- Snipcart script -->
+  <script async src="https://cdn.snipcart.com/themes/v3.4.1/default/snipcart.js"></script>
+
+  <script>
+    // Help popup functionality
+    document.addEventListener('DOMContentLoaded', () => {
+      const helpBtn = document.querySelector('.help-trigger');
+      const helpPopup = document.querySelector('.commands-popup');
+      
+      if (helpBtn && helpPopup) {
+        let popupVisible = false;
+        
+        helpBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          popupVisible = !popupVisible;
+          helpPopup.style.display = popupVisible ? 'block' : 'none';
+        });
+        
+        document.addEventListener('click', () => {
+          if (popupVisible) {
+            popupVisible = false;
+            helpPopup.style.display = 'none';
+          }
+        });
+        
+        helpPopup.addEventListener('click', (e) => {
+          e.stopPropagation();
+        });
+      }
+
+      // --- Main Application Initialization ---
+      // Add a small delay to ensure all scripts are parsed and ready.
+      setTimeout(() => {
+        console.log("Starting initialization...");
+        
+        const keyCapture = document.getElementById('keyCapture');
+        const c64Output = document.getElementById('c64Output');
+        const navButtons = document.querySelectorAll('.menu-button');
+
+        // Initialize command manager with proper keyboard handling
+        if (window.commandManager && window.commandManager.init) {
+          console.log("CommandManager found, initializing...");
+          window.commandManager.init({
+            keyCapture,
+            c64Output,
+            navLinks: navButtons
+          });
+          
+          // Initialize user functions if they exist
+          if (typeof initializeUserStatus === 'function') initializeUserStatus();
+          if (typeof enhanceUserManager === 'function') enhanceUserManager();
+          if (typeof initGoogleAuth === 'function') initGoogleAuth();
+
+          // Navigation button handlers  
+          navButtons.forEach(button => {
+            button.addEventListener('click', () => {
+              navButtons.forEach(btn => btn.classList.remove('active'));
+              button.classList.add('active');
+              const page = button.dataset.page;
+              logToOutput(`Loading ${page.toUpperCase()}...`);
+              window.commandManager.runCommand(`load ${page}`);
+            });
+          });
+
+          // Initialize the c64Syntax translator after command manager is ready
+          if (window.c64Syntax && window.c64Syntax.forceInit) {
+            window.c64Syntax.forceInit();
+          }
+
+          // Start with the home view (or shop, if preferred)
+          logToOutput("System ready");
+          logToOutput("Loading HOME...");
+          window.commandManager.runCommand('load home');
+
+          // Check for login messages in URL
+          const urlParams = new URLSearchParams(window.location.search);
+          if (urlParams.get('login') === 'success') {
+            setTimeout(() => {
+              window.commandManager.writeLine("✅ LOGIN SUCCESSFUL! WELCOME BACK!");
+              window.commandManager.newPromptLine();
+              logToOutput("Login successful");
+            }, 500);
+          } else if (urlParams.get('error')) {
+            setTimeout(() => {
+              window.commandManager.writeLine("❌ LOGIN ERROR: " + urlParams.get('error').toUpperCase());
+              window.commandManager.newPromptLine();
+              logToOutput("Login error: " + urlParams.get('error'));
+            }, 500);
+          }
+
+          // Auto-update user status periodically
+          setInterval(function() {
+            if (typeof checkUserStatusFromServer === 'function') {
+              checkUserStatusFromServer();
+            }
+          }, 15000);
+        } else {
+          console.error('CommandManager not available! Check for syntax errors in commandManager.js');
+          logToOutput("ERROR: System failed to initialize");
+          // Show error in main display
+          if (c64Output) {
+            c64Output.innerHTML = '<span style="color: #ff4444;">ERROR: SYSTEM FAILED TO INITIALIZE<br>CHECK CONSOLE FOR ERRORS</span>';
+          }
+        }
+      }, 100);
+    });
+
+    // --- All Helper Functions for User Auth and UI ---
+    
+    // Google Auth Integration
+    let googleAuthInstance = null;
+
+    function initGoogleAuth() {
+      setTimeout(() => {
+        if (typeof gapi !== 'undefined' && window.GOOGLE_CONFIG) {
+          try {
+            gapi.load('auth2', function() {
+              gapi.auth2.init({
+                client_id: window.GOOGLE_CONFIG.clientId
+              }).then(function(auth2) {
+                googleAuthInstance = auth2;
+                console.log("Google Auth initialized successfully");
+              }, function(error) {
+                console.error("Google Auth initialization error:", error);
+              });
+            });
+          } catch (e) {
+            console.error("Google Auth failed to load:", e);
+          }
+        } else {
+          console.warn("Google config not loaded, skipping Google Auth");
+        }
+      }, 2000);
+    }
+
+    function googleLogin() {
+      if (!googleAuthInstance) {
+        console.error("Google Auth not initialized");
+        return;
+      }
+      
+      googleAuthInstance.signIn().then(function(googleUser) {
+        const profile = googleUser.getBasicProfile();
+        const idToken = googleUser.getAuthResponse().id_token;
+        
+        // Send to backend
+        fetch('auth.php', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'action=google_login&token=' + encodeURIComponent(idToken)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            updateUserInterface();
+            window.commandManager.writeLine("✅ GOOGLE LOGIN SUCCESSFUL!");
+            window.commandManager.newPromptLine();
+          } else {
+            window.commandManager.writeLine("❌ GOOGLE LOGIN FAILED: " + (data.error || 'Unknown error'));
+            window.commandManager.newPromptLine();
+          }
+        });
+      }).catch(function(error) {
+        console.error('Google sign-in error:', error);
+      });
+    }
+
+    function performLogout() {
+      fetch('auth.php', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'action=logout'
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (googleAuthInstance && googleAuthInstance.isSignedIn.get()) {
+          googleAuthInstance.signOut();
+        }
+        forceGuestState();
+        window.commandManager.writeLine("✅ LOGGED OUT SUCCESSFULLY");
+        window.commandManager.newPromptLine();
+      });
+    }
+
+    function forceGuestState() {
+      const btn = document.getElementById('userActionBtn');
+      if (btn) {
+        btn.textContent = 'LOGIN';
+        btn.onclick = googleLogin;
+      }
+      
+      if (window.userManager) {
+        window.userManager.setCurrentUser(null);
+      }
+    }
+
+    function updateUserInterface() {
+      fetch('auth.php?action=status')
+        .then(response => response.json())
+        .then(data => {
+          const btn = document.getElementById('userActionBtn');
+          if (data.logged_in && data.user) {
+            if (btn) {
+              btn.textContent = data.user.name || 'USER';
+              btn.onclick = performLogout;
+            }
+            if (window.userManager) {
+              window.userManager.setCurrentUser(data.user);
+            }
+          } else {
+            forceGuestState();
+          }
+        })
+        .catch(error => {
+          console.error('Error checking user status:', error);
+          forceGuestState();
+        });
+    }
+
+    function checkUserStatusFromServer() {
+      updateUserInterface();
+    }
+
+    function initializeUserStatus() {
+      const btn = document.getElementById('userActionBtn');
+      if (btn) {
+        btn.onclick = googleLogin;
+      }
+      updateUserInterface();
+    }
+
+    function enhanceUserManager() {
+      if (window.userManager && window.userManager.handleUserCommand) {
+        const originalHandler = window.userManager.handleUserCommand;
+        window.userManager.handleUserCommand = function(cmd, args) {
+          if (cmd === 'login' && args.length === 0) {
+            googleLogin();
+            return true;
+          } else if (cmd === 'logout') {
+            performLogout();
+            return true;
+          }
+          return originalHandler.call(this, cmd, args);
+        };
+      }
+    }
+
+    // Output log helper
+    function logToOutput(message) {
+      const outputLog = document.getElementById('outputLog');
+      if (outputLog) {
+        const timestamp = new Date().toLocaleTimeString();
+        outputLog.innerHTML += `> [${timestamp}] ${message}<br>`;
+        outputLog.scrollTop = outputLog.scrollHeight;
+        const lines = outputLog.innerHTML.split('<br>');
+        if (lines.length > 10) {
+          outputLog.innerHTML = lines.slice(-10).join('<br>');
+        }
+      }
+    }
+    window.logToOutput = logToOutput;
+  </script>
+</body>
+</html>
+
+==============================
+Path: public\css\style.css
+==============================
+/* public/css/style.css - All styles in one place */
+/* This file contains ALL styling for the Commodore Blue interface */
+
+/* ============================================
+   FONTS
+   ============================================ */
+/* Load the classic C64 font for authentic retro look */
+@font-face {
+  font-family: 'C64';
+  src: url('../fonts/c64.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+/* ============================================
+   CSS VARIABLES (Custom Properties)
+   ============================================ */
+/* Define all colors and sizes in one place for easy theming */
+:root {
+  /* Color Scheme - Classic C64 colors */
+  --primary-color: #4040a0;     /* Dark blue - main background */
+  --secondary-color: #7878c8;   /* Light blue - panels and borders */
+  --accent-color: #50ff50;      /* Green - highlights and active elements */
+  --text-color: #ffffff;        /* White - main text */
+  --background-color: #000000;  /* Black - terminal background */
+  
+  /* Layout Variables */
+  --scale: 1.5;                                     /* Global scale factor */
+  --font-size: calc(14px * var(--scale));          /* Base font size */
+  --grid-gap: 16px;                                 /* Standard spacing between elements */
+  --detail-panel-width: 400px;                      /* Width of product detail panels */
+  --detail-panel-height: 550px;                     /* Height of product detail panels */
+  --gaming-window-height: 440px;                    /* Height of gaming windows */
+  --gaming-window-width: 640px;                     /* Width of gaming windows */
+}
+
+/* ============================================
+   RESET & BASE STYLES
+   ============================================ */
+/* Ensure consistent box model and remove default margins */
+*, *::before, *::after {
+  box-sizing: border-box;  /* Include padding/border in width calculations */
+  margin: 0;
+  padding: 0;
+}
+
+/* Base body styles */
+body {
+  height: 100vh;                          /* Full viewport height */
+  overflow: hidden;                       /* Prevent scrolling on body */
+  font-size: var(--font-size);           /* Apply scaled font size */
+  font-family: 'C64', monospace;         /* Use C64 font everywhere */
+  background: var(--primary-color);      /* Dark blue background */
+  color: var(--text-color);              /* White text */
+}
+
+/* Make images and videos responsive by default */
+img, video {
+  display: block;
+  max-width: 100%;
+}
+
+/* Link styling */
+a {
+  color: var(--accent-color);   /* Green links */
+  text-decoration: none;        /* No underline by default */
+}
+
+a:hover {
+  text-decoration: underline;   /* Underline on hover */
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+/* Marquee scrolling animation for top banner */
+@keyframes scroll {
+  0% { transform: translateX(100%); }    /* Start off-screen right */
+  100% { transform: translateX(-100%); } /* End off-screen left */
+}
+
+/* Flash animation for highlighting panels */
+@keyframes flash {
+  0%, 100% { border-color: inherit; }           /* Original color */
+  50% { border-color: var(--accent-color); }    /* Flash to green */
+}
+
+/* ============================================
+   MAIN LAYOUT STRUCTURE
+   ============================================ */
+/* Main container using CSS Grid for 3-row layout */
+.c64-container {
+  display: grid;
+  grid-template-rows: 5vh 1fr 10vh;  /* Top marquee, main content, bottom bar */
+  height: 100%;
+}
+
+/* ============================================
+   TOP MARQUEE
+   ============================================ */
+.c64-top-marquee {
+  position: relative;
+  overflow: hidden;                               /* Hide text outside bounds */
+  background: var(--secondary-color);            /* Light blue background */
+  border-bottom: 2px solid var(--primary-color); /* Dark blue border */
+}
+
+.marquee-text {
+  position: absolute;
+  white-space: nowrap;                    /* Keep text on one line */
+  font-weight: bold;
+  font-size: 1rem;
+  color: var(--primary-color);            /* Dark blue text */
+  animation: scroll 20s linear infinite;  /* Continuous scrolling */
+}
+
+/* ============================================
+   MAIN CONTENT ROW (3 columns)
+   ============================================ */
+.c64-main-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 10vw) 1fr minmax(80px, 8vw); /* Left nav, center, right commands */
+  overflow: hidden;
+  border-top: 2px solid var(--primary-color);
+  border-bottom: 2px solid var(--primary-color);
+}
+
+/* ============================================
+   LEFT COLUMN (Navigation)
+   ============================================ */
+.c64-left-column {
+  display: flex;
+  flex-direction: column;
+  background: var(--secondary-color);
+  padding: var(--grid-gap);
+  gap: var(--grid-gap);                          /* Space between buttons */
+  border-right: 2px solid var(--primary-color);
+}
+
+/* ============================================
+   CENTER COLUMN (Main Display)
+   ============================================ */
+.c64-center-column {
+  background: var(--primary-color);
+  padding: 2px;  /* Small padding for border effect */
+}
+
+/* Screen container */
+#c64Screen {
+  width: 100%;
+  height: 100%;
+  background: var(--background-color);
+  border: 2px solid var(--primary-color);
+}
+
+/* Terminal output area */
+#c64Output {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;                      /* Allow vertical scrolling */
+  white-space: pre-wrap;                 /* Preserve spacing, wrap lines */
+  line-height: 1.3;                      /* Comfortable line spacing */
+  text-transform: uppercase;             /* C64 style: all caps */
+  padding: var(--grid-gap);
+  background: var(--background-color);   /* Black background */
+  color: var(--accent-color);            /* Green text */
+  font-family: 'C64', monospace;
+  font-size: var(--font-size);
+}
+
+/* ============================================
+   RIGHT COLUMN (Commands)
+   ============================================ */
+.c64-right-column {
+  display: flex;
+  flex-direction: column;
+  background: var(--secondary-color);
+  padding: var(--grid-gap);
+  gap: var(--grid-gap);
+  border-left: 2px solid var(--primary-color);
+}
+
+/* ============================================
+   BOTTOM STATUS BAR
+   ============================================ */
+.c64-bottom-bar {
+  display: flex;
+  align-items: center;
+  background: var(--secondary-color);
+  padding: var(--grid-gap);
+  gap: var(--grid-gap);
+}
+
+/* Output log window */
+.output-log {
+  flex: 1;                              /* Take available space */
+  max-width: 50%;                       /* Don't take more than half */
+  max-height: 200%;                     /* Allow some overflow */
+  overflow: auto;                       /* Scroll if needed */
+  font-size: .7rem;                     /* Smaller text */
+  background: var(--background-color);
+  color: var(--accent-color);
+  border: 2px solid var(--primary-color);
+  padding: 0.5em;
+}
+
+/* ============================================
+   NAVIGATION & BUTTONS
+   ============================================ */
+/* Main navigation buttons in left column */
+.menu-button {
+  background: var(--secondary-color);
+  color: var(--text-color);
+  border: 2px solid var(--text-color);
+  text-align: center;
+  padding: .5em 0;
+  font-size: .8rem;
+  cursor: pointer;
+  transition: .2s;  /* Smooth hover effect */
+}
+
+.menu-button:hover,
+.menu-button.active {
+  background: var(--primary-color);
+  border-color: var(--accent-color);
+}
+
+/* Command trigger buttons in right column */
+.commands-trigger {
+  all: unset;                           /* Reset all button styles */
+  display: block;
+  font-size: .7rem;
+  padding: .35em;
+  background: var(--text-color);
+  color: var(--primary-color);
+  border: 2px solid var(--primary-color);
+  text-align: center;
+  cursor: pointer;
+  margin-bottom: var(--grid-gap);
+}
+
+.commands-trigger:hover {
+  background: var(--accent-color);
+  color: var(--background-color);
+}
+
+/* Help popup */
+.commands-popup {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: var(--secondary-color);
+  border: 2px solid var(--primary-color);
+  padding: 10px;
+  z-index: 1000;
+  min-width: 400px;
+}
+
+/* Control buttons (login, etc.) */
+.control-button {
+  padding: 5px 15px;
+  background: var(--primary-color);
+  color: var(--text-color);
+  border: 2px solid var(--text-color);
+  cursor: pointer;
+  font-family: 'C64', monospace;
+  font-size: 0.8rem;
+  transition: 0.2s;
+}
+
+.control-button:hover {
+  background: var(--accent-color);
+  color: var(--background-color);
+}
+
+/* ============================================
+   CONTENT DISPLAY ELEMENTS
+   ============================================ */
+/* Breadcrumb navigation */
+.breadcrumbs {
+  margin-bottom: 1em;
+  color: var(--text-color);
+}
+
+.breadcrumbs a {
+  color: var(--accent-color);
+}
+
+/* C64-style directory title bar */
+.directory-title {
+  background: var(--text-color);      /* White background */
+  color: var(--primary-color);        /* Blue text */
+  padding: 0 .25em;
+}
+
+/* Classic "blocks free" message */
+.blocks-free,
+.blocks-free-grid {
+  color: var(--accent-color);
+  margin: var(--grid-gap) 0;
+}
+
+/* Ready prompt line */
+.ready-line {
+  margin-top: var(--grid-gap);
+}
+
+/* ============================================
+   PAGINATION
+   ============================================ */
+.pagination {
+  text-align: center;
+  margin: 10px 0;
+}
+
+.pagination a,
+.pagination span {
+  margin: 0 2px;
+  padding: 2px 6px;
+}
+
+/* Current page indicator */
+.pagination .current-page {
+  background: var(--accent-color);
+  color: #000;
+}
+
+/* ============================================
+   GRID VIEW LAYOUT
+   ============================================ */
+/* Container wrapper for centering */
+.grid-container-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: var(--grid-gap) 0;
+}
+
+/* Main grid layout */
+.simple-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 200px)); /* FIXED: Force square items */
+  gap: var(--grid-gap);
+  width: 100%;
+  max-width: 90%;
+  align-items: start;        /* CHANGED: from stretch to start */
+  justify-content: center;   /* ADDED: Center the grid */
+}
+
+/* ============================================
+   GRID ITEMS - BASE STYLES
+   ============================================ */
+/* All grid items start with these base styles */
+.grid-item {
+  position: relative;
+  width: 200px;              /* FIXED: Explicit width */
+  height: 200px;             /* FIXED: Explicit height */
+  overflow: hidden;
+  border: 2px solid var(--secondary-color);
+  background-color: var(--background-color);
+  transition: border-color 0.3s, transform 0.2s;
+  cursor: pointer;
+  display: flex;
+  aspect-ratio: 1 / 1;       /* ADDED: Ensure square aspect */
+}
+
+.grid-item:hover {
+  border-color: var(--accent-color);
+  transform: scale(1.05);    /* Slight zoom on hover */
+  z-index: 2;                /* Bring to front */
+}
+
+/* ============================================
+   CATEGORY ITEMS
+   ============================================ */
+/* Special styling for category grid items */
+.grid-item.category-item {
+  background-color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.grid-item.category-item:hover {
+  border-color: var(--accent-color);
+}
+
+/* Category images fill the entire grid item */
+.grid-item .collection-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ============================================
+   PRODUCT & PROGRAM ITEMS
+   ============================================ */
+/* Images in grid items */
+.grid-item .product-image,
+.grid-item .program-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+
+/* Zoom image on hover */
+.grid-item:hover .program-image,
+.grid-item:hover .product-image {
+  transform: scale(1.1);
+}
+
+/* ============================================
+   GRID ITEM OVERLAYS
+   ============================================ */
+/* Text overlays on grid items */
+.grid-item .program-name,
+.grid-item .product-name,
+.grid-item .program-type,
+.grid-item .product-price,
+.grid-item .program-mini-desc,
+.grid-item .product-mini-desc {
+  position: absolute;
+  left: calc(var(--grid-gap) / 2);
+  right: calc(var(--grid-gap) / 2);
+  color: var(--text-color);
+  text-shadow: 1px 1px 4px rgba(0,0,0,0.8); /* Make text readable over images */
+  pointer-events: none;                       /* Don't interfere with clicks */
+  margin: 0;
+  padding: 0;
+}
+
+/* Top text (names) */
+.grid-item .program-name,
+.grid-item .product-name {
+  top: calc(var(--grid-gap) / 2);
+  font-weight: bold;
+}
+
+/* Bottom text (type/price) */
+.grid-item .program-type,
+.grid-item .product-price {
+  bottom: calc(var(--grid-gap) / 2);
+  font-weight: bold;
+}
+
+/* Description overlay (hidden until hover) */
+.grid-item .program-mini-desc,
+.grid-item .product-mini-desc {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 1em;
+  font-size: 0.9em;
+  background: rgba(0,0,0,0.7);    /* Semi-transparent black */
+  opacity: 0;                     /* Hidden by default */
+  transition: opacity 0.3s ease;
+}
+
+/* Show description on hover */
+.grid-item:hover .program-mini-desc,
+.grid-item:hover .product-mini-desc {
+  opacity: 1;
+}
+
+/* Hide name/price when showing description */
+.grid-item:hover .program-name,
+.grid-item:hover .product-name,
+.grid-item:hover .program-type,
+.grid-item:hover .product-price {
+  opacity: 0;
+}
+
+/* ============================================
+   DETAIL PANEL (Product Details)
+   ============================================ */
+/* Sliding panel that appears from the right */
+.detail-panel {
+  position: fixed;
+  right: 140px;
+  top: 40px;
+  width: var(--detail-panel-width);
+  height: var(--detail-panel-height);
+  background: var(--secondary-color);
+  color: var(--text-color);
+  border: 2px solid var(--text-color);
+  transition: transform .3s ease;
+  overflow-y: auto;
+  z-index: 900;
+  /* Start off-screen */
+  transform: translateX(calc(var(--detail-panel-width) + 150px));
+}
+
+/* Panel slide-in state */
+.detail-panel.open {
+  transform: translateX(0);
+}
+
+/* Highlight animation */
+.detail-panel.highlight {
+  animation: flash 1.5s ease-in-out;
+}
+
+/* Panel header */
+.detail-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px;
+  background: var(--primary-color);
+  border-bottom: 2px solid var(--text-color);
+}
+
+.detail-panel-title {
+  font-weight: bold;
+  flex: 1;
+  text-align: center;
+}
+
+/* Close button */
+.close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-color);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0 5px;
+}
+
+/* Buy button (Snipcart integration) */
+.buy-btn {
+  background: var(--accent-color);
+  color: var(--background-color);
+  border: 2px solid var(--background-color);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-family: 'C64', monospace;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.buy-btn:hover {
+  background: var(--text-color);
+  color: var(--primary-color);
+}
+
+/* Panel body content */
+.detail-panel-body {
+  padding: 15px;
+}
+
+/* Image gallery section */
+.detail-images {
+  margin-top: 15px;
+}
+
+/* Main image/video display */
+#mainMediaContainer img,
+#mainMediaContainer video {
+  width: 100%;
+  height: auto;
+  border: 2px solid var(--primary-color);
+}
+
+/* Thumbnail strip */
+.thumbnail-strip {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  overflow-x: auto;    /* Scroll if too many thumbnails */
+}
+
+/* Individual thumbnails */
+.thumbnail {
+  width: 60px;
+  height: 60px;
+  border: 2px solid var(--primary-color);
+  cursor: pointer;
+  overflow: hidden;
+  position: relative;
+}
+
+.thumbnail:hover {
+  border-color: var(--accent-color);
+}
+
+.thumbnail img,
+.thumbnail video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Play icon for video thumbnails */
+.video-thumb .play-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--accent-color);
+  font-size: 1.5rem;
+  pointer-events: none;
+}
+
+/* ============================================
+   GAMING WINDOW (Program Launcher)
+   ============================================ */
+/* Floating window for programs/games */
+.gaming-window {
+  position: fixed;
+  width: auto;
+  height: var(--gaming-window-height);
+  background: var(--secondary-color);
+  border: 2px solid var(--text-color);
+  transition: transform .3s ease, opacity .3s ease;
+  opacity: 0;                  /* Start hidden */
+  transform: scale(0.9);       /* Start slightly smaller */
+  z-index: 1000;
+}
+
+/* Gaming window open state */
+.gaming-window.open {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Highlight animation */
+.gaming-window.highlight {
+  animation: flash 1.5s ease-in-out;
+}
+
+/* Gaming window header */
+.gaming-window .header {
+  height: 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--primary-color);
+  color: var(--accent-color);
+  padding: var(--grid-gap);
+}
+
+/* Gaming window body */
+.gaming-window .body {
+  height: calc(100% - 40px);    /* Full height minus header */
+  overflow: hidden;
+  display: flex;
+  padding: var(--grid-gap);
+  gap: var(--grid-gap);
+}
+
+/* Game preview area (where emulator loads) */
+.game-preview {
+  width: var(--gaming-window-width);
+  height: calc(var(--gaming-window-width) / 1.6);  /* 16:10 aspect ratio */
+  flex-basis: var(--gaming-window-width);
+  background: var(--background-color);
+  border: 2px solid var(--text-color);
+}
+
+.game-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;    /* Keep aspect ratio */
+}
+
+/* Info panel in gaming window */
+.gaming-window .info {
+  flex: 1;
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  background: var(--primary-color);
+  padding: var(--grid-gap);
+  overflow-y: auto;
+}
+
+.gaming-window .info h3 {
+  color: var(--accent-color);
+  border-bottom: 2px solid var(--secondary-color);
+  padding-bottom: 5px;
+  margin-bottom: 10px;
+}
+
+/* Play/Stop buttons */
+.play-btn,
+.stop-btn {
+  background: var(--accent-color);
+  color: var(--background-color);
+  border: 2px solid var(--background-color);
+  padding: 10px 20px;
+  cursor: pointer;
+  font-family: 'C64', monospace;
+  font-size: 1rem;
+  font-weight: bold;
+  margin-top: auto;    /* Push to bottom */
+}
+
+.play-btn:hover,
+.stop-btn:hover {
+  background: var(--text-color);
+  color: var(--primary-color);
+}
+
+/* ============================================
+   MISCELLANEOUS
+   ============================================ */
+/* Hidden keyboard input capture */
+#keyCapture {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  opacity: 0;
+}
+
+/* Hide Snipcart checkout button */
+.snipcart-checkout {
+  display: none !important;
+}
+
+/* ============================================
+   RESPONSIVE ADJUSTMENTS
+   ============================================ */
+/* For smaller screens, you might want to add media queries here */
+/* Example:
+@media (max-width: 1024px) {
+  .simple-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 150px));
+  }
+  .grid-item {
+    width: 150px;
+    height: 150px;
+  }
+}
+*/
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+/* Centered content helper */
+.centered-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2em;
+}
+
+/* ============================================
+   SCROLLBAR STYLING
+   ============================================ */
+/* Custom scrollbar for C64 aesthetic */
+#c64Output::-webkit-scrollbar {
+  width: 12px;
+}
+
+#c64Output::-webkit-scrollbar-track {
+  background: var(--primary-color);
+}
+
+#c64Output::-webkit-scrollbar-thumb {
+  background: var(--secondary-color);
+  border: 1px solid var(--primary-color);
+}
+
+#c64Output::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-color);
+}
+
+/* ============================================
+   FOCUS STATES
+   ============================================ */
+/* Improve accessibility with visible focus indicators */
+button:focus,
+a:focus,
+.menu-button:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+/* Hide UI elements when printing */
+@media print {
+  .c64-left-column,
+  .c64-right-column,
+  .c64-top-marquee,
+  .c64-bottom-bar,
+  .detail-panel,
+  .gaming-window {
+    display: none !important;
+  }
+  
+  .c64-center-column {
+    width: 100% !important;
+  }
+}
+
+/* ============================================
+   END OF STYLESHEET
+   ============================================ */
+/* 
+   This stylesheet provides a complete C64-inspired interface with:
+   - Authentic retro color scheme
+   - Grid and list views for products/programs
+   - Sliding detail panels
+   - Gaming windows with emulator support
+   - Responsive grid layouts
+   - Smooth animations and transitions
+   
+   To customize:
+   1. Change colors in the :root variables
+   2. Adjust sizes and spacing using the CSS variables
+   3. Modify grid item sizes in .simple-grid and .grid-item
+   4. Add media queries for responsive design
+*/
+

@@ -1,0 +1,16 @@
+# Place this in your /public/images_products/.htaccess file
+
+# Disable caching for PNG images in this directory
+<FilesMatch "\.(png|jpg|jpeg|gif)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires 0
+</FilesMatch>
+
+# Alternative: Set short cache time (1 hour)
+<FilesMatch "\.(png|jpg|jpeg|gif)$">
+    Header set Cache-Control "max-age=3600, must-revalidate"
+</FilesMatch>
+
+# Force ETags for better cache validation
+FileETag MTime Size

@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Commodore Blue - Retro Computing Store</title>
+  
+  <!-- Force no caching -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  
+  <!-- Cache bust parameter and clear caches -->
+  <script>
+    // Version-based cache busting - INCREMENT THIS when you deploy changes
+    window.APP_VERSION = '1.0.5'; // Change this number when you update files
+    window.CACHE_BUST = Date.now();
+    
+    // Check if version changed
+    const STORAGE_KEY = 'app_version';
+    const lastVersion = localStorage.getItem(STORAGE_KEY);
+    
+    if (lastVersion !== window.APP_VERSION) {
+      console.log('New version detected (was ' + lastVersion + ', now ' + window.APP_VERSION + '), clearing caches...');
+      
+      // Clear all caches
+      if ('caches' in window) {
+        caches.keys().then(names => {
+          names.forEach(name => {
+            console.log('Clearing cache:', name);
+            caches.delete(name);
+          });
+        });
+      }
+      
+      // Unregister service workers
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          registrations.forEach(registration => {
+            registration.unregister();
+            console.log('Service worker unregistered');
+          });
+        });
+      }
+      
+      // Update stored version
+      localStorage.setItem(STORAGE_KEY, window.APP_VERSION);
+    }
+    
+    // Force clear function for manual use
+    window.forceClearAllCaches = function() {
+      if ('caches' in window) {
+        caches.keys().then(names => {
+          Promise.all(names.map(name => caches.delete(name))).then(() => {
+            console.log('All caches cleared');
+          });
+        });
+      }
+      
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          Promise.all(registrations.map(r => r.unregister())).then(() => {
+            console.log('All service workers unregistered');
+            localStorage.removeItem(STORAGE_KEY);
+            window.location.reload(true);
+          });
+        });
+      }
+    };
+  </script>
+  
+  <!-- Snipcart CSS -->
+  <link rel="preconnect" href="https://app.snipcart.com">
+  <link rel="preconnect" href="https://cdn.snipcart.com">
+  <link rel="stylesheet" href="https://cdn.snipcart.com/themes/v3.4.1/default/snipcart.css" />
+  
+  <!-- Main site stylesheet with cache busting -->
+  <script>
+    document.write('<link rel="stylesheet" href="css/style2.css?v=' + window.APP_VERSION + '" />');
+  </script>
+</head>
+<body>
+  <!-- C64 3-Row Container -->
+  <div class="c64-container">
+    <!-- Row 1: Top Marquee (full width) -->
+    <div class="c64-top-marquee">
+      <div class="marquee-text">
+        WELCOME TO COMMODOREBLUE.COM YOUR ONE STOP RETRO HANGOUT *** CLASSIC GAMES *** UPGRADES *** BUNDLES *** AUTHENTIC C64 EXPERIENCE ***
+      </div>
+    </div>
+
+    <!-- Row 2: Main Content (3 columns) -->
+    <div class="c64-main-row">
+      <!-- Left Column: Navigation -->
+      <div class="c64-left-column">
+        <div class="menu-button" data-page="home">HOME</div>
+        <div class="menu-button" data-page="shop">SHOP</div>
+        <div class="menu-button" data-page="code">CODE</div>
+        <div class="menu-button" data-page="bbs">BBS</div>
+        <div class="menu-button" data-page="pro-play">PRG PLAY</div>
+        <div class="menu-button" data-page="bas-play">BAS PLAY</div>
+      </div>
+      
+      <!-- Center Column: Main Content -->
+      <div class="c64-center-column">
+        <div id="c64Screen">
+          <div id="c64Output"></div>
+        </div>
+      </div>
+      
+      <!-- Right Column: Commands -->
+      <div class="c64-right-column">
+        <button class="commands-trigger help-trigger">[HELP]</button>
+        <button class="commands-trigger" onclick="if(window.displayManager) displayManager.toggleView()">[TOGGLE]</button>
+        <div class="commands-popup" style="display: none;">
+          <table width="100%" border="1" style="border-collapse: collapse;">
+            <tr>
+              <th colspan="2" style="text-align: center; padding: 5px; background-color: var(--secondary-color);">C64 COMMANDS - LOAD = CLICK</th>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px; width: 40%;">LOAD &lt;ITEM&gt;</td>
+              <td style="text-align: left; padding: 3px 8px; width: 60%;">Click/select item from list</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LOAD 1</td>
+              <td style="text-align: left; padding: 3px 8px;">Click first item in list</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LOAD GAMES</td>
+              <td style="text-align: left; padding: 3px 8px;">Click "Games" category</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LOAD CART</td>
+              <td style="text-align: left; padding: 3px 8px;">Open shopping cart</td>
+            </tr>
+            <tr>
+              <td colspan="2" style="background-color: var(--primary-color); padding: 2px;"></td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">LIST / DIR</td>
+              <td style="text-align: left; padding: 3px 8px;">Show current directory</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">HELP / ?</td>
+              <td style="text-align: left; padding: 3px 8px;">Show full help</td>
+            </tr>
+            <tr>
+              <td style="text-align: right; padding: 3px 8px;">CLEAR / CLS</td>
+              <td style="text-align: left; padding: 3px 8px;">Clear screen</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 3: Bottom Status Bar (full width) -->
+    <div class="c64-bottom-bar">
+      <!-- Output Log -->
+      <div class="output-log" id="outputLog">
+        > LOG EVENTS LISTED HERE<br>
+        > LOAD SHOP
+      </div>
+      
+      <!-- Control Buttons -->
+      <div class="control-buttons">
+        <button id="userActionBtn" class="control-button login-button">LOGIN</button>
+        <!-- Add cache clear button for development -->
+        <button onclick="forceClearAllCaches()" style="background: #ff4444; color: white; padding: 2px 6px; font-size: 10px; margin-left: 5px;">CLEAR CACHE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden input capturing keystrokes -->
+  <input type="text" id="keyCapture" spellcheck="false" autocomplete="off"
+         style="position:absolute; left:-9999px; top:-9999px; opacity:0;" />
+
+  <!-- Snipcart checkout button (hidden) -->
+  <button class="snipcart-checkout" style="display:none !important;"></button>
+
+  <!-- Snipcart container for checkout modal -->
+  <div hidden id="snipcart" data-config-modal-style="side" data-api-key="ZWI3N2VhMWEtNDQyNy00ZGY4LWE0YmYtNzBlYTc4MWZiZWZlNjM4NzY2NDM4MDM3MzExMDE2"></div>
+
+  <!-- Google API for OAuth -->
+  <script src="https://apis.google.com/js/api.js"></script>
+
+  <!-- Load Google config dynamically from PHP -->
+  <script>
+    document.write('<script src="config.php?js&v=' + window.APP_VERSION + '"><\/script>');
+  </script>
+
+  <!-- Our scripts with cache busting - SIMPLIFIED LIST -->
+  <script>
+    // Load all scripts with cache busting
+    const scripts = [
+      'js/productServices.js',
+      'js/uiManager.js',          // Now contains all UI logic
+      'js/emulatorManager.js',
+      'js/cartManager.js',
+      'js/commandManager.js',
+      'js/c64Syntax.js',
+      'js/userManager.js'
+    ];
+    
+    scripts.forEach(src => {
+      document.write('<script src="' + src + '?v=' + window.APP_VERSION + '"><\/script>');
+    });
+  </script>
+  
+  <!-- Snipcart script -->
+  <script async src="https://cdn.snipcart.com/themes/v3.4.1/default/snipcart.js"></script>
+
+  <script>
+    // Help popup functionality
+    document.addEventListener('DOMContentLoaded', () => {
+      const helpBtn = document.querySelector('.help-trigger');
+      const helpPopup = document.querySelector('.commands-popup');
+      
+      if (helpBtn && helpPopup) {
+        let popupVisible = false;
+        
+        helpBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          popupVisible = !popupVisible;
+          helpPopup.style.display = popupVisible ? 'block' : 'none';
+        });
+        
+        document.addEventListener('click', () => {
+          if (popupVisible) {
+            popupVisible = false;
+            helpPopup.style.display = 'none';
+          }
+        });
+        
+        helpPopup.addEventListener('click', (e) => {
+          e.stopPropagation();
+        });
+      }
+
+      // --- Main Application Initialization ---
+      // Add a small delay to ensure all scripts are parsed and ready.
+      setTimeout(() => {
+        console.log("Starting initialization...");
+        
+        const keyCapture = document.getElementById('keyCapture');
+        const c64Output = document.getElementById('c64Output');
+        const navButtons = document.querySelectorAll('.menu-button');
+
+        // Initialize command manager with proper keyboard handling
+        if (window.commandManager && window.commandManager.init) {
+          console.log("CommandManager found, initializing...");
+          window.commandManager.init({
+            keyCapture,
+            c64Output,
+            navLinks: navButtons
+          });
+          
+          // Initialize user functions if they exist
+          if (typeof initializeUserStatus === 'function') initializeUserStatus();
+          if (typeof enhanceUserManager === 'function') enhanceUserManager();
+          if (typeof initGoogleAuth === 'function') initGoogleAuth();
+
+          // Navigation button handlers  
+          navButtons.forEach(button => {
+            button.addEventListener('click', () => {
+              navButtons.forEach(btn => btn.classList.remove('active'));
+              button.classList.add('active');
+              const page = button.dataset.page;
+              logToOutput(`Loading ${page.toUpperCase()}...`);
+              window.commandManager.runCommand(`load ${page}`);
+            });
+          });
+
+          // Initialize the c64Syntax translator after command manager is ready
+          if (window.c64Syntax && window.c64Syntax.forceInit) {
+            window.c64Syntax.forceInit();
+          }
+
+          // Start with the home view (or shop, if preferred)
+          logToOutput("System ready");
+          logToOutput("Loading HOME...");
+          window.commandManager.runCommand('load home');
+
+          // Check for login messages in URL
+          const urlParams = new URLSearchParams(window.location.search);
+          if (urlParams.get('login') === 'success') {
+            setTimeout(() => {
+              window.commandManager.writeLine("✅ LOGIN SUCCESSFUL! WELCOME BACK!");
+              window.commandManager.newPromptLine();
+              logToOutput("Login successful");
+            }, 500);
+          } else if (urlParams.get('error')) {
+            setTimeout(() => {
+              window.commandManager.writeLine("❌ LOGIN ERROR: " + urlParams.get('error').toUpperCase());
+              window.commandManager.newPromptLine();
+              logToOutput("Login error: " + urlParams.get('error'));
+            }, 500);
+          }
+
+          // Auto-update user status periodically
+          setInterval(function() {
+            if (typeof checkUserStatusFromServer === 'function') {
+              checkUserStatusFromServer();
+            }
+          }, 15000);
+        } else {
+          console.error('CommandManager not available! Check for syntax errors in commandManager.js');
+          logToOutput("ERROR: System failed to initialize");
+          // Show error in main display
+          if (c64Output) {
+            c64Output.innerHTML = '<span style="color: #ff4444;">ERROR: SYSTEM FAILED TO INITIALIZE<br>CHECK CONSOLE FOR ERRORS</span>';
+          }
+        }
+      }, 100);
+    });
+
+    // --- All Helper Functions for User Auth and UI ---
+    
+    // Google Auth Integration
+    let googleAuthInstance = null;
+
+    function initGoogleAuth() {
+      setTimeout(() => {
+        if (typeof gapi !== 'undefined' && window.GOOGLE_CONFIG) {
+          try {
+            gapi.load('auth2', function() {
+              gapi.auth2.init({
+                client_id: window.GOOGLE_CONFIG.clientId
+              }).then(function(auth2) {
+                googleAuthInstance = auth2;
+                console.log("Google Auth initialized successfully");
+              }, function(error) {
+                console.error("Google Auth initialization error:", error);
+              });
+            });
+          } catch (e) {
+            console.error("Google Auth failed to load:", e);
+          }
+        } else {
+          console.warn("Google config not loaded, skipping Google Auth");
+        }
+      }, 2000);
+    }
+
+    function googleLogin() {
+      if (!googleAuthInstance) {
+        console.error("Google Auth not initialized");
+        return;
+      }
+      
+      googleAuthInstance.signIn().then(function(googleUser) {
+        const profile = googleUser.getBasicProfile();
+        const idToken = googleUser.getAuthResponse().id_token;
+        
+        // Send to backend
+        fetch('auth.php', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'action=google_login&token=' + encodeURIComponent(idToken)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            updateUserInterface();
+            window.commandManager.writeLine("✅ GOOGLE LOGIN SUCCESSFUL!");
+            window.commandManager.newPromptLine();
+          } else {
+            window.commandManager.writeLine("❌ GOOGLE LOGIN FAILED: " + (data.error || 'Unknown error'));
+            window.commandManager.newPromptLine();
+          }
+        });
+      }).catch(function(error) {
+        console.error('Google sign-in error:', error);
+      });
+    }
+
+    function performLogout() {
+      fetch('auth.php', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'action=logout'
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (googleAuthInstance && googleAuthInstance.isSignedIn.get()) {
+          googleAuthInstance.signOut();
+        }
+        forceGuestState();
+        window.commandManager.writeLine("✅ LOGGED OUT SUCCESSFULLY");
+        window.commandManager.newPromptLine();
+      });
+    }
+
+    function forceGuestState() {
+      const btn = document.getElementById('userActionBtn');
+      if (btn) {
+        btn.textContent = 'LOGIN';
+        btn.onclick = googleLogin;
+      }
+      
+      if (window.userManager) {
+        window.userManager.setCurrentUser(null);
+      }
+    }
+
+    function updateUserInterface() {
+      fetch('auth.php?action=status')
+        .then(response => response.json())
+        .then(data => {
+          const btn = document.getElementById('userActionBtn');
+          if (data.logged_in && data.user) {
+            if (btn) {
+              btn.textContent = data.user.name || 'USER';
+              btn.onclick = performLogout;
+            }
+            if (window.userManager) {
+              window.userManager.setCurrentUser(data.user);
+            }
+          } else {
+            forceGuestState();
+          }
+        })
+        .catch(error => {
+          console.error('Error checking user status:', error);
+          forceGuestState();
+        });
+    }
+
+    function checkUserStatusFromServer() {
+      updateUserInterface();
+    }
+
+    function initializeUserStatus() {
+      const btn = document.getElementById('userActionBtn');
+      if (btn) {
+        btn.onclick = googleLogin;
+      }
+      updateUserInterface();
+    }
+
+    function enhanceUserManager() {
+      if (window.userManager && window.userManager.handleUserCommand) {
+        const originalHandler = window.userManager.handleUserCommand;
+        window.userManager.handleUserCommand = function(cmd, args) {
+          if (cmd === 'login' && args.length === 0) {
+            googleLogin();
+            return true;
+          } else if (cmd === 'logout') {
+            performLogout();
+            return true;
+          }
+          return originalHandler.call(this, cmd, args);
+        };
+      }
+    }
+
+    // Output log helper
+    function logToOutput(message) {
+      const outputLog = document.getElementById('outputLog');
+      if (outputLog) {
+        const timestamp = new Date().toLocaleTimeString();
+        outputLog.innerHTML += `> [${timestamp}] ${message}<br>`;
+        outputLog.scrollTop = outputLog.scrollHeight;
+        const lines = outputLog.innerHTML.split('<br>');
+        if (lines.length > 10) {
+          outputLog.innerHTML = lines.slice(-10).join('<br>');
+        }
+      }
+    }
+    window.logToOutput = logToOutput;
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+build/
+
+# OS files
+.DS_Store
+
+# logs
+*.log
+
+# environment configs
+.envpublic/c64/vice.js/

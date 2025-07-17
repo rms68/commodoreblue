@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+  <meta charset="UTF-8">
+  <title>C64 Emulator - Vice.js</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #000;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    #canvas {
+      border: 0px none; /* CRITICAL: No border or padding for mouse coords */
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      outline: none; /* Remove focus outline */
+    }
+    #canvas:focus {
+      outline: 2px solid #50ff50; /* Green outline when focused */
+    }
+    #loading {
+      position: absolute;
+      color: #50ff50;
+      font-family: 'C64', monospace;
+      font-size: 20px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">LOADING VICE.JS...</div>
+  <canvas id="canvas" tabindex="0" style="border: 0px none;"></canvas>
+  
+  <script>
+    // Get parameters from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const fileUrl = urlParams.get('file');
+    const fileType = urlParams.get('type') || 'prg';
+    const fileName = urlParams.get('name') || 'program';
+    const autostart = urlParams.get('autostart') === 'true';
+    
+    console.log('Emulator parameters:', { fileUrl, fileType, fileName, autostart });
+    
+    // Function to focus the canvas
+    function focusCanvas() {
+      const canvas = document.getElementById('canvas');
+      if (canvas) {
+        canvas.focus();
+        console.log('Canvas focused');
+        
+        // Also click it to ensure activation
+        canvas.click();
+        
+        // Check if focused
+        if (document.activeElement === canvas) {
+          console.log('Canvas successfully has focus');
+        } else {
+          console.log('Canvas focus failed, retrying...');
+          setTimeout(focusCanvas, 500);
+        }
+      }
+    }
+    
+    // Listen for focus requests from parent
+    window.addEventListener('message', function(event) {
+      if (event.data === 'focus') {
+        console.log('Focus request received from parent');
+        focusCanvas();
+      }
+    });
+    
+    // Function to load file from URL
+    async function loadFileFromUrl(url, filename) {
+      console.log('Fetching file from:', url);
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const arrayBuffer = await response.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        console.log('File loaded, size:', uint8Array.length);
+        
+        // Store for preRun
+        window.fileData = uint8Array;
+        window.fileName = filename + '.' + fileType;
+        
+        // Now start the emulator
+        startEmulator();
+      } catch (error) {
+        console.error('Error loading file:', error);
+        const loadingDiv = document.getElementById('loading');
+        loadingDiv.innerHTML = 'ERROR LOADING FILE<br><span style="color: #ff7777;">' + error.message + '</span>';
+      }
+    }
+    
+    // Function to set up filesystem
+    function setupFileSystem() {
+      console.log('Setting up filesystem...');
+      if (window.fileData && window.fileName) {
+        try {
+          FS.createDataFile('/', window.fileName, window.fileData, true, true);
+          console.log('File created in FS:', window.fileName);
+        } catch (e) {
+          console.error('FS.createDataFile error:', e);
+        }
+      }
+    }
+    
+    // Audio detection
+    function audioDetected() {
+      return (typeof AudioContext === 'function') || 
+             (typeof webkitAudioContext === 'function');
+    }
+    
+    // Start the emulator
+    function startEmulator() {
+      console.log('Starting emulator...');
+      
+      // Build arguments
+      let args = [];
+      
+      // Add audio configuration
+      if (audioDetected()) {
+        args = args.concat(['-soundsync', '0', '-soundrate', '22050', '-soundfragsize', '2']);
+      } else {
+        args.push('+sound');
+      }
+      
+      // Add autostart if requested
+      if (autostart && window.fileName) {
+        args.push('-autostart');
+        args.push(window.fileName);
+      }
+      
+      console.log('Module arguments:', args);
+      
+      // Configure Module for vice.js
+      window.Module = {
+        preRun: [setupFileSystem],
+        postRun: [],
+        arguments: args,
+        canvas: document.getElementById('canvas'),
+        
+        print: function(text) {
+          console.log(text);
+        },
+        
+        printErr: function(text) {
+          console.error(text);
+        },
+        
+        setStatus: function(text) {
+          const loadingDiv = document.getElementById('loading');
+          if (text) {
+            loadingDiv.textContent = text;
+          } else {
+            loadingDiv.style.display = 'none';
+          }
+        },
+        
+        onRuntimeInitialized: function() {
+          console.log('VICE.js runtime initialized');
+          Module.setStatus('');
+          
+          // Auto-focus the canvas after emulator is ready
+          setTimeout(function() {
+            focusCanvas();
+            
+            // Also try to grab keyboard focus
+            const canvas = document.getElementById('canvas');
+            if (canvas) {
+              // Make sure it's focusable
+              canvas.tabIndex = 0;
+              
+              // Try multiple focus methods
+              canvas.focus();
+              canvas.click();
+              
+              // Force keyboard focus
+              canvas.addEventListener('click', function() {
+                this.focus();
+              });
+              
+              console.log('Emulator ready and focused');
+            }
+          }, 100);
+        },
+        
+        totalDependencies: 0,
+        
+        monitorRunDependencies: function(left) {
+          this.totalDependencies = Math.max(this.totalDependencies, left);
+          Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+        }
+      };
+      
+      window.onerror = function(message, source, lineno, colno, error) {
+        console.error('Window error:', message, 'at', source + ':' + lineno);
+        Module.setStatus('Exception thrown, see JavaScript console');
+        Module.setStatus = function(text) {
+          if (text) Module.printErr('[post-exception status] ' + text);
+        };
+      };
+      
+      // Load the vice.js emulator
+      const script = document.createElement('script');
+      script.src = 'js/x64.js';
+      script.async = true;
+      document.body.appendChild(script);
+    }
+    
+    // Initialize - load file first if provided
+    if (fileUrl) {
+      // Clean up the filename for the virtual FS
+      const cleanFileName = fileName.replace(/[^a-zA-Z0-9_-]/g, '_');
+      loadFileFromUrl(fileUrl, cleanFileName);
+    } else {
+      // No file specified, just start the emulator
+      startEmulator();
+    }
+    
+    // Auto-focus when page loads
+    window.addEventListener('load', function() {
+      setTimeout(focusCanvas, 1000);
+    });
+    
+    // Focus when clicked anywhere on the page
+    document.addEventListener('click', function() {
+      focusCanvas();
+    });
+  </script>
+</body>
+</html>

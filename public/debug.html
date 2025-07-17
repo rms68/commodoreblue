@@ -1,0 +1,59 @@
+// Add this to your browser console to debug product loading
+(function debugProducts() {
+  console.log('=== PRODUCT DEBUG ===');
+  
+  // Check if productServices exists
+  if (window.productServices) {
+    console.log('✓ productServices exists');
+    
+    // Check available methods
+    console.log('Available methods:', Object.keys(window.productServices));
+    
+    // Try to fetch categories
+    console.log('\nFetching categories...');
+    window.productServices.getCategories()
+      .then(categories => {
+        console.log('Categories loaded:', categories);
+        if (!categories || categories.length === 0) {
+          console.warn('No categories found!');
+        }
+      })
+      .catch(err => {
+        console.error('Error loading categories:', err);
+      });
+    
+    // Try to fetch all products
+    console.log('\nFetching all products...');
+    window.productServices.getAllProducts()
+      .then(products => {
+        console.log('Products loaded:', products);
+        if (!products || products.length === 0) {
+          console.warn('No products found!');
+        }
+      })
+      .catch(err => {
+        console.error('Error loading products:', err);
+      });
+      
+  } else {
+    console.error('✗ productServices not found!');
+  }
+  
+  // Check viewRenderer
+  if (window.viewRenderer) {
+    console.log('\n✓ viewRenderer exists');
+    console.log('Current context:', window.viewRenderer.getCurrentContext());
+    console.log('Current results:', window.viewRenderer.getCurrentResults());
+  }
+  
+  // Check commandManager
+  if (window.commandManager) {
+    console.log('\n✓ commandManager exists');
+    
+    // Try running the shop command manually
+    setTimeout(() => {
+      console.log('\nManually running "load shop" command...');
+      window.commandManager.runCommand('load shop');
+    }, 1000);
+  }
+})();
